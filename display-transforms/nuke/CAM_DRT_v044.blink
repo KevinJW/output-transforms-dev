@@ -45,13 +45,15 @@ kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>
     bool HK_mode_in;
     bool HK_mode_mid;
     bool HK_mode_out;
+    int et_mode;
+
     int compressMode;
 
     // Reference Luminance in Cd/sqm
     float referenceLuminance;
 
     // Background Luminance in Cd/sqm
-    float backgroundLuminance;
+    float backgroundLuminance;    // TODO: unused should remove
 
     // Viewing Conditions (for output)
     // 0: Dark
@@ -320,7 +322,7 @@ kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>
 
   void define()
   {
-
+    defineParam(et_mode, "Hellwig Eccentricity", -1);
   }
 
   // multiplies a 3D vector with a 3x3 matrix
@@ -1121,7 +1123,7 @@ float3 uncompress_bjorn(float3 xyz)
         // # Step 9
         // # Computing the correlate of *colourfulness* :math:`M`.
         // M = 43 * surround.N_c * e_t * np.sqrt(a**2 + b**2)
-        float M = 43.0f * surround.z * sqrt(a * a + b * b);
+        float M = 43.0f * surround.z * sqrt(a * a + b * b) * eccentricity_factor(hr, et_mode);;
 
         // # Computing the correlate of *chroma* :math:`C`.
         // with sdiv_mode():
@@ -1220,7 +1222,7 @@ float3 uncompress_bjorn(float3 xyz)
         // # Computing *P_p_1* to *P_p_2*.
         // P_p_1 = 43 * surround.N_c * e_t
         // P_p_2 = A
-        float P_p_1 = 43.0f * surround.z;
+        float P_p_1 = 43.0f * surround.z * eccentricity_factor(hr, et_mode);
         float P_p_2 = A;
 
 
@@ -1447,23 +1449,21 @@ float3 uncompress_bjorn(float3 xyz)
     return f;
   }
 
-  // Return compression gamut cusp M scaled with an eccentricity factor
-  float cusp_with_eccentricity_factor(float h)
+  // Return eccentricity factor
+  float eccentricity_factor(float hr, int method)
   {
-    float2 JMcusp = ccuspFromTable(h);
     float e_t = 1.0f;
 
     // CAM16
-    if (cc_et == 0)
+    if (method == 0)
     {
       // NOTE: custom scaler 0.275 instead of 0.25 in CAM16
-      e_t = 0.275f * (cos(2.0f + h * PI / 180.0f) + 3.8f);
+      e_t = 0.275f * (cos(2.0f + hr) + 3.8f);
     }
     // Hellwig2022
     // CAM16 vs Hellwig2022: https://onlinelibrary.wiley.com/cms/asset/60788dfc-6bae-4949-bf8d-bd8c3467aef8/col22792-fig-0005-m.jpg
-    else if (cc_et == 1)
+    else if (method == 1)
     {
-      float hr = radians(h);
       float _h = hr;
       float _2_h = 2 * hr;
       float _3_h = 3 * hr;
@@ -1481,9 +1481,8 @@ float3 uncompress_bjorn(float3 xyz)
       );
     }
     // Custom https://www.desmos.com/calculator/vukgp6rtos
-    else if (cc_et == 2)
+    else if (method == 2)
     {
-      float hr = radians(h);
       float hr2 = hr * 2;
       float hr3 = hr * 3;
       e_t = (-0.47f * cos(hr) +
@@ -1495,9 +1494,8 @@ float3 uncompress_bjorn(float3 xyz)
               1.86f) * 0.58f;
     }
     // Custom2 https://www.desmos.com/calculator/rsbs41nnnm
-    else if (cc_et == 3)
+    else if (method == 3)
     {
-      float hr = radians(h);
       float hr2 = hr * 2;
       float hr3 = hr * 3;
       e_t = (-0.53f * cos(hr) +
@@ -1508,6 +1506,13 @@ float3 uncompress_bjorn(float3 xyz)
               0.00f * sin(hr3) +
               2.6f) * 0.48f;
     }
+    return e_t;
+  }
+  // Return compression gamut cusp M scaled with an eccentricity factor
+  float cusp_with_eccentricity_factor(float h)
+  {
+    float2 JMcusp = ccuspFromTable(h);
+    float e_t = eccentricity_factor(radians(h), cc_et);
     return JMcusp.y * e_t;
   }
 
@@ -2048,7 +2053,7 @@ float3 getReachBoundry(float3 Jmh)
   // the function will search outwards from where the line intersects the achromatic axis with a staring incement of 'startStepSize'
   // once the boundary has been crossed it will search in the opposite direction with half the step size
   // and will repeat this as as many times as is set by the 'precision' paramter
-  float2 findBoundary(float2 JMSource, float2 JMFocus, float h, float3 XYZw, float3 XYZd65, float3x3 XYZ_to_RGB, float smoothing, int precision, float startStepSize )
+  float2 findBoundary(float2 JMSource, float2 JMFocus, float h, float3 XYZw, float3x3 XYZ_to_RGB, float smoothing, int precision, float startStepSize )
   {
 
     float2 achromaticIntercept = float2(JMFocus.x - (((JMSource.x-JMFocus.x) / (JMSource.y-JMFocus.y))*JMFocus.y), 0.0f);
@@ -2070,7 +2075,7 @@ float3 getReachBoundry(float3 Jmh)
       for( int k = 0; k < 30; ++k )
       {
         JMtest = JMtest + unitVector * stepSize;
-        int inside = isInsideCube( vector_dot(XYZ_to_RGB, JMh_to_XYZ( float3(JMtest.x, JMtest.y, h), XYZw, XYZd65, outputViewingConditions , L_A, Y_b, discountIlluminant_mid, HK_mode_mid) / referenceLuminance ), boundaryRGB, smoothing);
+        int inside = isInsideCube( vector_dot(XYZ_to_RGB, JMh_to_XYZ( float3(JMtest.x, JMtest.y, h), XYZw, outputViewingConditions , L_A, Y_b, discountIlluminant_mid, HK_mode_mid) / referenceLuminance ), boundaryRGB, smoothing);
 
         if( searchOutwards )
         {
