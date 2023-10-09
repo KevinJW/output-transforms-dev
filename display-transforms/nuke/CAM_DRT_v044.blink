@@ -448,6 +448,15 @@ kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>
     return D;
   }
 
+  float final_degree_of_adaptation(float F, bool discountIlluminant) // TODO: bad name
+  {
+      if(discountIlluminant)
+      {
+          return 1.0f;
+      }
+      return clip(degree_of_adaptation(F, L_A), 0, 1);
+  }
+
   // convert radians to degrees
   float degrees( float radians )
   {
@@ -1003,7 +1012,7 @@ float3 uncompress_bjorn(float3 xyz)
   // NOTE: Following modifications have been made to stock Hellwig2022 model for this DRT:
   //
   // - Custom primaries
-  // - Eccentriticty factor has been removed
+  // - Eccentriticty factor computable in a number of ways
   // - Compress mode
   //
   float3 XYZ_to_Hellwig2022_JMh( float3 XYZ, float3 XYZ_w, float L_A, float Y_b, float3 surround, bool discountIlluminant, bool HK_mode)
@@ -1018,12 +1027,7 @@ float3 uncompress_bjorn(float3 xyz)
         float3x3 MATRIX_16 = CAT_CAT16;
         float3 RGB_w = vector_dot(MATRIX_16, XYZ_w);
 
-        // # Computing degree of adaptation :math:`D`.
-        float D = clip(degree_of_adaptation(surround.x, L_A), 0, 1);
-        if(discountIlluminant)
-        {
-            D = 1.0f;
-        }
+        float D = final_degree_of_adaptation(surround.x, discountIlluminant);
 
         // # Viewing conditions dependent parameters
         float k = 1 / (5 * L_A + 1);
@@ -1093,9 +1097,8 @@ float3 uncompress_bjorn(float3 xyz)
         // # Computing the *hue* angle :math:`h`.
         // h = np.degrees(np.arctan2(b, a)) % 360
         // Unclear why this isnt matching the python version.
-        float h = mod(degrees(atan2(b, a)), 360.0f);
-
-        float hr = radians(h);
+        float hr = atan2(b, a);
+        float h = mod(degrees(hr), 360.0f);
 
         // # Step 6
         // # Computing achromatic responses for the stimulus.
@@ -1172,12 +1175,7 @@ float3 uncompress_bjorn(float3 xyz)
         float3x3 MATRIX_16 = CAT_CAT16;
         float3 RGB_w = vector_dot(MATRIX_16, XYZ_w);
 
-        // # Computing degree of adaptation :math:`D`.
-        float D = clip(degree_of_adaptation(surround.x, L_A), 0, 1);
-        if(discountIlluminant)
-        {
-            D = 1.0f;
-        }
+        float D = final_degree_of_adaptation(surround.x, discountIlluminant);
 
         // # Viewing conditions dependent parameters
         float k = 1 / (5 * L_A + 1);
@@ -2703,6 +2701,12 @@ float3 getReachBoundry(float3 Jmh)
       // output JMFocus
       diagnostic = compressGamut(srcRGB, 1);
     }
+    else if (diagnosticMode == 50)
+    {
+      // output input as JMh
+      diagnostic = input_RGB_to_JMh(srcRGB);
+    }
+
 
 
 
