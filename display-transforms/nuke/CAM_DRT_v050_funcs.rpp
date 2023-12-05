@@ -186,32 +186,27 @@
     float z = xyz.z;
 
     float C = (x+y+z)/3;
-    if (C == 0.0f)
-      return xyz;
 
     float R = sqrt(spow((x-C),2) + spow((y-C),2) + spow((z-C),2)) ;
     // np.sqrt(2/3)
     // 0.816496580927726
     R = R * 0.816496580927726;
+    float r = 0.0;
 
     if (R != 0.0)
     {
       x = (x-C)/R ;
       y = (y-C)/R ;
       z = (z-C)/R ;
+      r = R/C ;
     }
 
-    float r = R/C ;
     float s = -min(x, min(y, z));
 
     float t = 0.0;
-    if (r > 0.000001f)
-    {
-      t = 0.5f + spow(spow(s - 0.5f, 2.0f) + spow(sqrt(4.0f / spow(r, 2.0f) + 1.0f) - 1.0f, 2.0f) / 4.0f, 0.5f);
-      if (t < 0.000001f)
-        return xyz;
-      t = 1.0f / t;
-    }
+    t = 0.5f + sqrt(spow(s - 0.5f, 2.0f) + spow(sqrt(4.0f / spow(r, 2.0f) + 1.0f) - 1.0f, 2.0f) / 4.0f);
+    t = 1.0f / t;
+
 
     x = C*x*t + C ;
     y = C*y*t + C ;
@@ -227,32 +222,28 @@ float3 uncompress_bjorn(float3 xyz)
   float z = xyz.z;
 
   float C = (x+y+z)*(1.0/3.0) ;
-  if (C == 0.0)
-    return xyz;
+
 
   float R = sqrt(spow((x-C),2) + spow((y-C),2) + spow((z-C),2));
   // np.sqrt(2/3)
   // 0.816496580927726
   R = R * 0.816496580927726;
+  float t = 0.0;
 
   if (R != 0.0)
   {
     x = (x-C)/R ;
     y = (y-C)/R ;
     z = (z-C)/R ;
+    t = R/C ;
   }
 
-  float t = R/C ;
   float s = -min(x, min(y, z));
 
   float r = 0.0;
-  if (t > 0.000001f)
-  {
-    r = sqrt(spow((2*sqrt(spow((1/t-0.5),2)-spow((s-0.5),2))+1),2)-1);
-    if (r < 0.000001f)
-      return xyz;
-    r = 2/r;
-  }
+  r = sqrt(fabs(spow((2*sqrt(fabs(spow((1/t-0.5),2)-spow((s-0.5),2)))+1),2)-1));
+  r = 2/r;
+
 
   x = C*x*r + C ;
   y = C*y*r + C ;
