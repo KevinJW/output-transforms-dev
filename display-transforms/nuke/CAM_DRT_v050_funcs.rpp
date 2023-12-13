@@ -179,6 +179,11 @@
     return rgb;
   }
 
+    float hypot3(float x, float y, float z)
+  {
+    return sqrt(x*x + y*y + z*z);
+  }
+
   float3 compress_bjorn(float3 xyz)
   {
     float x = xyz.x;
@@ -187,7 +192,7 @@
 
     float C = (x+y+z)/3;
 
-    float R = sqrt(spow((x-C),2) + spow((y-C),2) + spow((z-C),2)) ;
+    float R = hypot3(x-C, y-C, z-C);
     // np.sqrt(2/3)
     // 0.816496580927726
     R = R * 0.816496580927726;
@@ -199,12 +204,15 @@
       y = (y-C)/R ;
       z = (z-C)/R ;
       r = R/C ;
+      r = r*r ;
     }
+    r = sqrt(4.0f / r + 1.0f) - 1.0f;
 
     float s = -min(x, min(y, z));
+    s = s -0.5f ;
 
     float t = 0.0;
-    t = 0.5f + sqrt(spow(s - 0.5f, 2.0f) + spow(sqrt(4.0f / spow(r, 2.0f) + 1.0f) - 1.0f, 2.0f) / 4.0f);
+    t = 0.5f + sqrt(s*s + r*r / 4.0f);
     t = 1.0f / t;
 
 
@@ -221,10 +229,9 @@ float3 uncompress_bjorn(float3 xyz)
   float y = xyz.y;
   float z = xyz.z;
 
-  float C = (x+y+z)*(1.0/3.0) ;
+  float C = (x+y+z)/3;
 
-
-  float R = sqrt(spow((x-C),2) + spow((y-C),2) + spow((z-C),2));
+  float R = hypot3(x-C, y-C, z-C);
   // np.sqrt(2/3)
   // 0.816496580927726
   R = R * 0.816496580927726;
@@ -239,9 +246,14 @@ float3 uncompress_bjorn(float3 xyz)
   }
 
   float s = -min(x, min(y, z));
+  s = s -0.5f ;
 
-  float r = 0.0;
-  r = sqrt(fabs(spow((2*sqrt(fabs(spow((1/t-0.5),2)-spow((s-0.5),2)))+1),2)-1));
+  t = 1/t;
+  t = t-0.5;
+  float r = 2 * sqrt(fabs(t*t - s*s)) + 1;
+  r = sqrt(fabs(r*r - 1));
+  if (r == 0.0)
+    return xyz;
   r = 2/r;
 
 
@@ -847,13 +859,7 @@ float3 uncompress_bjorn(float3 xyz)
         float3 D_RGB = D * Y_w / RGB_w + 1 - D;
         float3 RGB_wc = D_RGB * RGB_w;
 
-        // # Applying forward post-adaptation non-linear response compression.
-        // F_L_RGB = spow(F_L[..., np.newaxis] * np.absolute(RGB_wc) / 100, 0.42)
-        float3 F_L_RGB = float3spow(F_L * float3abs(RGB_wc) / 100.0f, 0.42f);
-
-        // # Computing achromatic responses for the whitepoint.
-        // RGB_aw = (400 * np.sign(RGB_wc) * F_L_RGB) / (27.13 + F_L_RGB) + 0.1
-        float3 RGB_aw = (400.0f * float3sign(RGB_wc) * F_L_RGB) / (27.13f + F_L_RGB);
+        float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, F_L);
 
         // # Computing achromatic responses for the whitepoint.
         // R_aw, G_aw, B_aw = tsplit(RGB_aw)
@@ -877,7 +883,6 @@ float3 uncompress_bjorn(float3 xyz)
 
         // # Step 3
         // # Applying forward post-adaptation non-linear response compression.
-
         if (compressMode)
         {
           RGB_c = compress(RGB_c);
@@ -907,9 +912,9 @@ float3 uncompress_bjorn(float3 xyz)
         // # Computing the *hue* angle :math:`h`.
         // h = np.degrees(np.arctan2(b, a)) % 360
         // Unclear why this isnt matching the python version.
-        float h = mod(degrees(atan2(b, a)), 360.0f);
+        float hr = atan2(b, a);
+        float h = mod(degrees(hr), 360.0f);
 
-        float hr = radians(h);
 
         // # Step 6
         // # Computing achromatic responses for the stimulus.
@@ -1004,13 +1009,7 @@ float3 uncompress_bjorn(float3 xyz)
         float3 D_RGB = D * Y_w / RGB_w + 1 - D;
         float3 RGB_wc = D_RGB * RGB_w;
 
-        // # Applying forward post-adaptation non-linear response compression.
-        // F_L_RGB = spow(F_L[..., np.newaxis] * np.absolute(RGB_wc) / 100, 0.42)
-        float3 F_L_RGB = float3spow(F_L * float3abs(RGB_wc) / 100.0f, 0.42f);
-
-        // # Computing achromatic responses for the whitepoint.
-        // RGB_aw = (400 * np.sign(RGB_wc) * F_L_RGB) / (27.13 + F_L_RGB) + 0.1
-        float3 RGB_aw = (400.0f * float3sign(RGB_wc) * F_L_RGB) / (27.13f + F_L_RGB);
+        float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, F_L);
 
         // # Computing achromatic responses for the whitepoint.
         // R_aw, G_aw, B_aw = tsplit(RGB_aw)
@@ -1272,18 +1271,18 @@ float3 uncompress_bjorn(float3 xyz)
   {
     float2 JMcusp = ccuspFromTable(h);
     float e_t = 1.0f;
+    float hr = radians(h);
 
     // CAM16
     if (cc_et == 0)
     {
       // NOTE: custom scaler 0.275 instead of 0.25 in CAM16
-      e_t = 0.275f * (cos(2.0f + h * PI / 180.0f) + 3.8f);
+      e_t = 0.275f * (cos(2.0f + hr) + 3.8f);
     }
     // Hellwig2022
     // CAM16 vs Hellwig2022: https://onlinelibrary.wiley.com/cms/asset/60788dfc-6bae-4949-bf8d-bd8c3467aef8/col22792-fig-0005-m.jpg
     else if (cc_et == 1)
     {
-      float hr = radians(h);
       float _h = hr;
       float _2_h = 2 * hr;
       float _3_h = 3 * hr;
@@ -1303,7 +1302,6 @@ float3 uncompress_bjorn(float3 xyz)
     // Custom https://www.desmos.com/calculator/vukgp6rtos
     else if (cc_et == 2)
     {
-      float hr = radians(h);
       float hr2 = hr * 2;
       float hr3 = hr * 3;
       e_t = (-0.47f * cos(hr) +
