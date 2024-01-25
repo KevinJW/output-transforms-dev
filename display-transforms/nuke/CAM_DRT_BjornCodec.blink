@@ -1,0 +1,103 @@
+kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image
+  Image<eWrite>                            dst; // the output image
+
+param:
+  bool invert;
+
+local:
+
+  void define()
+  {
+    defineParam(invert, "Direction", false);
+  }
+
+  void init()
+  {
+  }
+
+  // basic 3D hypotenuse function, does not deal with under/overflow
+  float hypot(float3 xyz)
+  {
+    return sqrt(dot(xyz, xyz));
+  }
+
+  float3 compress_bjorn(float3 xyz)
+  {
+    float C = (xyz.x + xyz.y + xyz.z) / 3;
+
+    float3 xyz_temp = xyz - C;
+    float  R        = hypot(xyz_temp);
+
+    if (R == 0.0f || C == 0.0f)
+      return xyz;
+
+    R = R * 0.816496580927726; // sqrt(2/3)
+
+    xyz_temp = xyz_temp / R;
+
+    float r = R / C;
+    r       = r * r;
+    r       = sqrt(4.0f / r + 1.0f) - 1.0f;
+
+    float s = -min(xyz_temp.x, min(xyz_temp.y, xyz_temp.z));
+    s       = s - 0.5f;
+
+    float t = 0.5f + sqrt(s * s + r * r / 4.0f);
+    t       = C / t; // t is always >= 0.5f
+
+    xyz_temp = xyz_temp * t + C;
+
+    return xyz_temp;
+  }
+
+  float3 uncompress_bjorn(float3 xyz)
+  {
+    float C = (xyz.x + xyz.y + xyz.z) / 3;
+
+    float3 xyz_temp = xyz - C;
+    float  R        = hypot(xyz_temp);
+
+    if (R == 0.0f || C == 0.0f)
+      return xyz;
+
+    R = R * 0.816496580927726; // sqrt(2/3)
+
+    xyz_temp = xyz_temp / R;
+
+    float t = C / R;
+    t       = t - 0.5f;
+
+    float s = -min(xyz_temp.x, min(xyz_temp.y, xyz_temp.z));
+    s       = s - 0.5f;
+
+    float r = 2 * sqrt(fabs(t * t - s * s)) + 1;
+    r       = sqrt(fabs(r * r - 1));
+    if (r == 0.0)
+      return xyz;
+    r = C * 2 / r;
+
+    xyz_temp = xyz_temp * r + C;
+
+    return xyz_temp;
+  }
+
+  void process()
+  {
+    SampleType(src) source = src();
+    float3 input(source.x, source.y, source.z);
+    float3 RGB;
+    float3 out;
+
+    if (invert)
+    {
+      out = uncompress_bjorn(input);
+    }
+    else
+    {
+      out = compress_bjorn(input);
+    }
+    dst() = float4(out.x, out.y, out.z, source.w);
+  }
+};

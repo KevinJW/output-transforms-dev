@@ -1,0 +1,52 @@
+set cut_paste_input [stack 0]
+version 14.1 v1
+push $cut_paste_input
+Group {
+ name CAM_DRT_BjornCodec
+ selected true
+ xpos 36
+ ypos 75
+ addUserKnob {20 User}
+ addUserKnob {4 Direction M {Compress Decompress ""}}
+}
+ Input {
+  inputs 0
+  name Input1
+  xpos 228
+  ypos -39
+ }
+ Constant {
+  inputs 0
+  channels rgb
+  format "256 256 0 0 256 256 1 square_256"
+  name Constant1
+  selected true
+  xpos 118
+  ypos 1
+ }
+ Switch {
+  inputs 2
+  which {{"\[exists parent.input]"}}
+  name Switch1
+  xpos 228
+  ypos 25
+ }
+ BlinkScript {
+  kernelSourceFile /mnt/scratch/kwheatle/git/output-transforms-dev/display-transforms/nuke/CAM_DRT_BjornCodec.blink
+  recompileCount 36
+  ProgramGroup 1
+  KernelDescription "3 \"DRT_CAM_Kernel\" iterate pixelWise b49232b6f5012afa87f598f7af4e1413f88a618da2679a63657478c638ba7e83 2 \"src\" Read Point \"dst\" Write Point 1 \"Direction\" Bool 1 AA== 1 \"invert\" 1 1 Default 0"
+  kernelSource "kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>\n\{\n  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image\n  Image<eWrite>                            dst; // the output image\n\nparam:\n  bool invert;\n\nlocal:\n\n  void define()\n  \{\n    defineParam(invert, \"Direction\", false);\n  \}\n\n  void init()\n  \{\n  \}\n\n  // basic 3D hypotenuse function, does not deal with under/overflow\n  float hypot(float3 xyz)\n  \{\n    return sqrt(dot(xyz, xyz));\n  \}\n\n  float3 compress_bjorn(float3 xyz)\n  \{\n    float C = (xyz.x + xyz.y + xyz.z) / 3;\n\n    float3 xyz_temp = xyz - C;\n    float  R        = hypot(xyz_temp);\n\n    if (R == 0.0f || C == 0.0f)\n      return xyz;\n\n    R = R * 0.816496580927726; // sqrt(2/3)\n\n    xyz_temp = xyz_temp / R;\n\n    float r = R / C;\n    r       = r * r;\n    r       = sqrt(4.0f / r + 1.0f) - 1.0f;\n\n    float s = -min(xyz_temp.x, min(xyz_temp.y, xyz_temp.z));\n    s       = s - 0.5f;\n\n    float t = 0.5f + sqrt(s * s + r * r / 4.0f);\n    t       = C / t; // t is always >= 0.5f\n\n    xyz_temp = xyz_temp * t + C;\n\n    return xyz_temp;\n  \}\n\n  float3 uncompress_bjorn(float3 xyz)\n  \{\n    float C = (xyz.x + xyz.y + xyz.z) / 3;\n\n    float3 xyz_temp = xyz - C;\n    float  R        = hypot(xyz_temp);\n\n    if (R == 0.0f || C == 0.0f)\n      return xyz;\n\n    R = R * 0.816496580927726; // sqrt(2/3)\n\n    xyz_temp = xyz_temp / R;\n\n    float t = C / R;\n    t       = t - 0.5f;\n\n    float s = -min(xyz_temp.x, min(xyz_temp.y, xyz_temp.z));\n    s       = s - 0.5f;\n\n    float r = 2 * sqrt(fabs(t * t - s * s)) + 1;\n    r       = sqrt(fabs(r * r - 1));\n    if (r == 0.0)\n      return xyz;\n    r = C * 2 / r;\n\n    xyz_temp = xyz_temp * r + C;\n\n    return xyz_temp;\n  \}\n\n  void process()\n  \{\n    SampleType(src) source = src();\n    float3 input(source.x, source.y, source.z);\n    float3 RGB;\n    float3 out;\n\n    if (invert)\n    \{\n      out = uncompress_bjorn(input);\n    \}\n    else\n    \{\n      out = compress_bjorn(input);\n    \}\n    dst() = float4(out.x, out.y, out.z, source.w);\n  \}\n\};\n"
+  rebuild ""
+  DRT_CAM_Kernel_Direction {{parent.Direction}}
+  rebuild_finalise ""
+  name BlinkScript1
+  xpos 228
+  ypos 78
+ }
+ Output {
+  name Output1
+  xpos 228
+  ypos 149
+ }
+end_group
