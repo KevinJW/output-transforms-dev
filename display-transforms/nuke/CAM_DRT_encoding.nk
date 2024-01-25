@@ -1,0 +1,58 @@
+set cut_paste_input [stack 0]
+version 14.1 v1
+push $cut_paste_input
+Group {
+ name CAM_DRT_Encoding
+ selected true
+ xpos 36
+ ypos 1
+ addUserKnob {20 User}
+ addUserKnob {4 Direction M {Decode Encode}}
+ addUserKnob {4 Primaries M {AP0-ACES AP1-ACES sRGB/Rec.709-D65 Rec.2020-D65 P3-D65 P3-DCI XYZ}}
+ addUserKnob {4 Encoding M {Linear ACEScct sRGB "BT.1886 (Gamma 2.4)" "Gamma 2.6" ST2084}}
+ addUserKnob {7 referenceLuminance l "Reference Luminance" R 0 200}
+ referenceLuminance 100
+}
+ Input {
+  inputs 0
+  name Input1
+  xpos 228
+  ypos -39
+ }
+ Constant {
+  inputs 0
+  channels rgb
+  format "256 256 0 0 256 256 1 square_256"
+  name Constant1
+  xpos 110
+  ypos 11
+ }
+ Switch {
+  inputs 2
+  which {{"\[exists parent.input]"}}
+  name Switch1
+  xpos 228
+  ypos 25
+ }
+ BlinkScript {
+  kernelSourceFile /mnt/scratch/kwheatle/git/output-transforms-dev/display-transforms/nuke/CAM_DRT_encoding.blink
+  recompileCount 33
+  ProgramGroup 1
+  KernelDescription "3 \"DRT_CAM_Kernel\" iterate pixelWise 8ec7b00fc474b7dec7b553cfae312d5d0b67d05ae2dfd24ac90ab9d923e874cc 2 \"src\" Read Point \"dst\" Write Point 4 \"Direction\" Bool 1 AA== \"Encoding\" Int 1 AAAAAA== \"Primaries\" Int 1 AAAAAA== \"Reference Luminance\" Float 1 AADIQg== 4 \"invert\" 1 1 Default \"encoding\" 1 1 Default \"primaries\" 1 1 Default \"referenceLuminance\" 1 1 Default 10 \"st2084_m_1\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_m_2\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_c_1\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_c_2\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_c_3\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_m_1_d\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_m_2_d\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"st2084_L_p\" Float 3 1 AAAAAAAAAAAAAAAAAAAAAA== \"XYZ_to_RGB\" Float 9 1 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \"RGB_to_XYZ\" Float 9 1 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  kernelSource "kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>\n\{\n  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image\n  Image<eWrite>                            dst; // the output image\n\nparam:\n  //\n  // Input Parameters\n  //\n  bool invert;\n\n  // Encoding of the Input Image\n  // 0: Linear\n  // 1: ACEScct\n  // 2: sRGB\n  // 3: BT.1886 (Gamma 2.4)\n  // 4: Gamma 2.6\n  // 5: ST2084\n  int encoding;\n\n  // Primaries of the Input Image\n  // 0: AP0-ACES\n  // 1: AP1-ACES\n  // 2: sRGB/Rec.709-D65\n  // 3: Rec.2020-D65\n  // 4: P3-D65\n  // 5: P3-DCI\n  int primaries;\n\n  // Reference Luminance in Cd/sqm\n  float referenceLuminance;\n\nlocal:\n  // ST2084 vars\n  float3 st2084_m_1;\n  float3 st2084_m_2;\n  float3 st2084_c_1;\n  float3 st2084_c_2;\n  float3 st2084_c_3;\n  float3 st2084_m_1_d;\n  float3 st2084_m_2_d;\n  float3 st2084_L_p;\n\n  float3x3 XYZ_to_RGB;\n  float3x3 RGB_to_XYZ;\n\n  void define()\n  \{\n    defineParam(invert, \"Direction\", false);\n    defineParam(encoding, \"Encoding\", 0);\n    defineParam(primaries, \"Primaries\", 0);\n    defineParam(referenceLuminance, \"Reference Luminance\", 100.0f);\n  \}\n\n  void init()\n  \{\n    st2084_m_1   = 2610.0f / 4096.0f * (1.0f / 4.0f);\n    st2084_m_2   = 2523.0f / 4096.0f * 128.0f;\n    st2084_c_1   = 3424.0f / 4096.0f;\n    st2084_c_2   = 2413.0f / 4096.0f * 32.0f;\n    st2084_c_3   = 2392.0f / 4096.0f * 32.0f;\n    st2084_m_1_d = 1.0f / st2084_m_1;\n    st2084_m_2_d = 1.0f / st2084_m_2;\n    st2084_L_p   = 100.0f; // Scale so 100 is 1.0f for Nuke\n\n\n    // clang-format off\n    float identity_matrix\[] = \{\n       1.0f,  0.0f,  0.0f,\n       0.0f,  1.0f,  0.0f,\n       0.0f,  0.0f,  1.0f,\n    \};\n\n    float XYZ_to_AP0_ACES_matrix\[] = \{\n       1.0498110175f,  0.0000000000f, -0.0000974845f,\n      -0.4959030231f,  1.3733130458f,  0.0982400361f,\n       0.0000000000f,  0.0000000000f,  0.9912520182f,\n    \};\n\n    float XYZ_to_AP1_ACES_matrix\[] = \{\n       1.6410233797f, -0.3248032942f, -0.2364246952f,\n      -0.6636628587f,  1.6153315917f,  0.0167563477f, \n       0.0117218943f, -0.0082844420f,  0.9883948585f,\n    \};\n\n    float XYZ_to_Rec709_D65_matrix\[] = \{\n       3.2409699419f, -1.5373831776f, -0.4986107603f,\n      -0.9692436363f,  1.8759675015f,  0.0415550574f,\n       0.0556300797f, -0.2039769589f,  1.0569715142f,\n    \};\n\n    float XYZ_to_Rec2020_D65_matrix\[] = \{\n       1.7166511880f, -0.3556707838f, -0.2533662814f,\n      -0.6666843518f,  1.6164812366f,  0.0157685458f,\n       0.0176398574f, -0.0427706133f,  0.9421031212f,\n    \};\n\n    float XYZ_to_P3_D65_matrix\[] = \{\n       2.4934969119f, -0.9313836179f, -0.4027107845f,\n      -0.8294889696f,  1.7626640603f,  0.0236246858f,\n       0.0358458302f, -0.0761723893f,  0.9568845240f,\n    \};\n\n    float XYZ_to_P3_DCI_matrix\[] = \{\n       2.7253940305f, -1.0180030062f, -0.4401631952f,\n      -0.7951680258f,  1.6897320548f,  0.0226471906f,\n       0.0412418914f, -0.0876390192f,  1.1009293786f,\n    \};\n    // clang-format on\n\n    // populate the input primaries matrix\n    if (primaries == 0)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_AP0_ACES_matrix);\n    \}\n    else if (primaries == 1)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_AP1_ACES_matrix);\n    \}\n    else if (primaries == 2)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_Rec709_D65_matrix);\n    \}\n    else if (primaries == 3)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_Rec2020_D65_matrix);\n    \}\n    else if (primaries == 4)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_P3_D65_matrix);\n    \}\n    else if (primaries == 5)\n    \{\n      XYZ_to_RGB.setArray(XYZ_to_P3_DCI_matrix);\n    \}\n    else\n    \{\n      XYZ_to_RGB.setArray(identity_matrix);\n    \}\n    RGB_to_XYZ = XYZ_to_RGB.invert();\n  \}\n\n  float sRGB_to_linear(float v)\n  \{\n    return v < 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);\n  \}\n\n  float3 sRGB_to_linear3(float3 v)\n  \{\n    return float3\{sRGB_to_linear(v.x), sRGB_to_linear(v.y), sRGB_to_linear(v.z)\};\n  \}\n\n  float linear_to_sRGB(float v)\n  \{\n    return v <= 0.0031308f ? 12.92f * v : 1.055 * (pow(v, 1.0f / 2.4f)) - 0.055f;\n  \}\n\n  float3 linear_to_sRGB3(float3 v)\n  \{\n    return float3\{linear_to_sRGB(v.x), linear_to_sRGB(v.y), linear_to_sRGB(v.z)\};\n  \}\n\n  float ACEScct_to_linear(float v)\n  \{\n    return v > 0.155251141552511f ? pow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;\n  \}\n\n  float3 ACEScct_to_linear3(float3 v)\n  \{\n    return float3\{ACEScct_to_linear(v.x), ACEScct_to_linear(v.y), ACEScct_to_linear(v.z)\};\n  \}\n\n  float linear_to_ACEScct(float v)\n  \{\n    return v > 0.0078125f ? (log2(v) + 9.72f) / 17.52f : 10.5402377416545f * v + 0.0729055341958355f;\n  \}\n\n  float3 linear_to_ACEScct3(float3 v)\n  \{\n    return float3\{linear_to_ACEScct(v.x), linear_to_ACEScct(v.y), linear_to_ACEScct(v.z)\};\n  \}\n\n  float3 ST2084_to_linear(float3 v)\n  \{\n    float3 V_p = pow(v, st2084_m_2_d);\n    return pow((max(float3\{0.0f, 0.0f, 0.0f\}, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;\n  \}\n\n  float3 linear_to_ST2084(float3 v)\n  \{\n    float3 Y_p = pow(max(float3\{0.0f, 0.0f, 0.0f\}, v) / st2084_L_p, st2084_m_1);\n    return pow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);\n  \}\n\n  float3 encodingToLuminance(int encoding, float3 v)\n  \{\n    if (encoding == 1)\n    \{\n      v = ACEScct_to_linear3(v);\n    \}\n    else if (encoding == 2)\n    \{\n      v = sRGB_to_linear3(v);\n    \}\n    else if (encoding == 3)\n    \{\n      v = pow(v, float3\{2.4f, 2.4f, 2.4f\});\n    \}\n    else if (encoding == 4)\n    \{\n      v = pow(v, float3\{2.6f, 2.6f, 2.6f\});\n    \}\n    else if (encoding == 5)\n    \{\n      v = ST2084_to_linear(v);\n    \}\n\n    // default Linear scaling to our reference Luminace\n    return v * referenceLuminance;\n  \}\n\n  float3 luminanceToEncoding(int encoding, float3 v)\n  \{\n    v = v / referenceLuminance;\n\n    if (encoding == 1)\n    \{\n      return linear_to_ACEScct3(v);\n    \}\n    else if (encoding == 2)\n    \{\n      return linear_to_sRGB3(v);\n    \}\n    else if (encoding == 3)\n    \{\n      return pow(v, float3\{1.0f / 2.4f, 1.0f / 2.4f, 1.0f / 2.4f\});\n    \}\n    else if (encoding == 4)\n    \{\n      return pow(v, float3\{1.0f / 2.6f, 1.0f / 2.6f, 1.0f / 2.6f\});\n    \}\n    else if (encoding == 5)\n    \{\n      return linear_to_ST2084(v);\n    \}\n\n    // default Linear scaling to our reference Luminace\n    return v;\n  \}\n\n  // multiplies a 3D vector with a 3x3 matrix\n  float3 vector_dot(float3x3 m, float3 v)\n  \{\n    float3 r;\n    for (int c = 0; c < 3; c++)\n    \{\n      r\[c] = m\[c]\[0] * v.x + m\[c]\[1] * v.y + m\[c]\[2] * v.z;\n    \}\n\n    return r;\n  \}\n\n  void process()\n  \{\n    SampleType(src) source = src();\n    float3 input(source.x, source.y, source.z);\n    float3 RGB;\n    float3 out;\n\n    if (invert)\n    \{\n      RGB = vector_dot(XYZ_to_RGB, input);\n      out = luminanceToEncoding(encoding, RGB);\n    \}\n    else\n    \{\n      RGB = encodingToLuminance(encoding, input);\n      out = vector_dot(RGB_to_XYZ, RGB);\n    \}\n    dst() = float4(out.x, out.y, out.z, source.w);\n  \}\n\};\n"
+  rebuild ""
+  DRT_CAM_Kernel_Direction {{parent.Direction}}
+  DRT_CAM_Kernel_Encoding {{parent.Encoding}}
+  DRT_CAM_Kernel_Primaries {{parent.Primaries}}
+  "DRT_CAM_Kernel_Reference Luminance" {{parent.referenceLuminance}}
+  rebuild_finalise ""
+  name BlinkScript1
+  xpos 228
+  ypos 78
+ }
+ Output {
+  name Output1
+  xpos 228
+  ypos 149
+ }
+end_group

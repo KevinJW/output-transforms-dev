@@ -1,0 +1,282 @@
+kernel DRT_CAM_Kernel : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image
+  Image<eWrite>                            dst; // the output image
+
+param:
+  //
+  // Input Parameters
+  //
+  bool invert;
+
+  // Encoding of the Input Image
+  // 0: Linear
+  // 1: ACEScct
+  // 2: sRGB
+  // 3: BT.1886 (Gamma 2.4)
+  // 4: Gamma 2.6
+  // 5: ST2084
+  int encoding;
+
+  // Primaries of the Input Image
+  // 0: AP0-ACES
+  // 1: AP1-ACES
+  // 2: sRGB/Rec.709-D65
+  // 3: Rec.2020-D65
+  // 4: P3-D65
+  // 5: P3-DCI
+  int primaries;
+
+  // Reference Luminance in Cd/sqm
+  float referenceLuminance;
+
+local:
+  // ST2084 vars
+  float3 st2084_m_1;
+  float3 st2084_m_2;
+  float3 st2084_c_1;
+  float3 st2084_c_2;
+  float3 st2084_c_3;
+  float3 st2084_m_1_d;
+  float3 st2084_m_2_d;
+  float3 st2084_L_p;
+
+  float3x3 XYZ_to_RGB;
+  float3x3 RGB_to_XYZ;
+
+  void define()
+  {
+    defineParam(invert, "Direction", false);
+    defineParam(encoding, "Encoding", 0);
+    defineParam(primaries, "Primaries", 0);
+    defineParam(referenceLuminance, "Reference Luminance", 100.0f);
+  }
+
+  void init()
+  {
+    st2084_m_1   = 2610.0f / 4096.0f * (1.0f / 4.0f);
+    st2084_m_2   = 2523.0f / 4096.0f * 128.0f;
+    st2084_c_1   = 3424.0f / 4096.0f;
+    st2084_c_2   = 2413.0f / 4096.0f * 32.0f;
+    st2084_c_3   = 2392.0f / 4096.0f * 32.0f;
+    st2084_m_1_d = 1.0f / st2084_m_1;
+    st2084_m_2_d = 1.0f / st2084_m_2;
+    st2084_L_p   = 100.0f; // Scale so 100 is 1.0f for Nuke
+
+
+    // clang-format off
+    float identity_matrix[] = {
+       1.0f,  0.0f,  0.0f,
+       0.0f,  1.0f,  0.0f,
+       0.0f,  0.0f,  1.0f,
+    };
+
+    float XYZ_to_AP0_ACES_matrix[] = {
+       1.0498110175f,  0.0000000000f, -0.0000974845f,
+      -0.4959030231f,  1.3733130458f,  0.0982400361f,
+       0.0000000000f,  0.0000000000f,  0.9912520182f,
+    };
+
+    float XYZ_to_AP1_ACES_matrix[] = {
+       1.6410233797f, -0.3248032942f, -0.2364246952f,
+      -0.6636628587f,  1.6153315917f,  0.0167563477f, 
+       0.0117218943f, -0.0082844420f,  0.9883948585f,
+    };
+
+    float XYZ_to_Rec709_D65_matrix[] = {
+       3.2409699419f, -1.5373831776f, -0.4986107603f,
+      -0.9692436363f,  1.8759675015f,  0.0415550574f,
+       0.0556300797f, -0.2039769589f,  1.0569715142f,
+    };
+
+    float XYZ_to_Rec2020_D65_matrix[] = {
+       1.7166511880f, -0.3556707838f, -0.2533662814f,
+      -0.6666843518f,  1.6164812366f,  0.0157685458f,
+       0.0176398574f, -0.0427706133f,  0.9421031212f,
+    };
+
+    float XYZ_to_P3_D65_matrix[] = {
+       2.4934969119f, -0.9313836179f, -0.4027107845f,
+      -0.8294889696f,  1.7626640603f,  0.0236246858f,
+       0.0358458302f, -0.0761723893f,  0.9568845240f,
+    };
+
+    float XYZ_to_P3_DCI_matrix[] = {
+       2.7253940305f, -1.0180030062f, -0.4401631952f,
+      -0.7951680258f,  1.6897320548f,  0.0226471906f,
+       0.0412418914f, -0.0876390192f,  1.1009293786f,
+    };
+    // clang-format on
+
+    // populate the input primaries matrix
+    if (primaries == 0)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_AP0_ACES_matrix);
+    }
+    else if (primaries == 1)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_AP1_ACES_matrix);
+    }
+    else if (primaries == 2)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_Rec709_D65_matrix);
+    }
+    else if (primaries == 3)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_Rec2020_D65_matrix);
+    }
+    else if (primaries == 4)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_P3_D65_matrix);
+    }
+    else if (primaries == 5)
+    {
+      XYZ_to_RGB.setArray(XYZ_to_P3_DCI_matrix);
+    }
+    else
+    {
+      XYZ_to_RGB.setArray(identity_matrix);
+    }
+    RGB_to_XYZ = XYZ_to_RGB.invert();
+  }
+
+  float sRGB_to_linear(float v)
+  {
+    return v < 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);
+  }
+
+  float3 sRGB_to_linear3(float3 v)
+  {
+    return float3{sRGB_to_linear(v.x), sRGB_to_linear(v.y), sRGB_to_linear(v.z)};
+  }
+
+  float linear_to_sRGB(float v)
+  {
+    return v <= 0.0031308f ? 12.92f * v : 1.055 * (pow(v, 1.0f / 2.4f)) - 0.055f;
+  }
+
+  float3 linear_to_sRGB3(float3 v)
+  {
+    return float3{linear_to_sRGB(v.x), linear_to_sRGB(v.y), linear_to_sRGB(v.z)};
+  }
+
+  float ACEScct_to_linear(float v)
+  {
+    return v > 0.155251141552511f ? pow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;
+  }
+
+  float3 ACEScct_to_linear3(float3 v)
+  {
+    return float3{ACEScct_to_linear(v.x), ACEScct_to_linear(v.y), ACEScct_to_linear(v.z)};
+  }
+
+  float linear_to_ACEScct(float v)
+  {
+    return v > 0.0078125f ? (log2(v) + 9.72f) / 17.52f : 10.5402377416545f * v + 0.0729055341958355f;
+  }
+
+  float3 linear_to_ACEScct3(float3 v)
+  {
+    return float3{linear_to_ACEScct(v.x), linear_to_ACEScct(v.y), linear_to_ACEScct(v.z)};
+  }
+
+  float3 ST2084_to_linear(float3 v)
+  {
+    float3 V_p = pow(v, st2084_m_2_d);
+    return pow((max(float3{0.0f, 0.0f, 0.0f}, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;
+  }
+
+  float3 linear_to_ST2084(float3 v)
+  {
+    float3 Y_p = pow(max(float3{0.0f, 0.0f, 0.0f}, v) / st2084_L_p, st2084_m_1);
+    return pow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);
+  }
+
+  float3 encodingToLuminance(int encoding, float3 v)
+  {
+    if (encoding == 1)
+    {
+      v = ACEScct_to_linear3(v);
+    }
+    else if (encoding == 2)
+    {
+      v = sRGB_to_linear3(v);
+    }
+    else if (encoding == 3)
+    {
+      v = pow(v, float3{2.4f, 2.4f, 2.4f});
+    }
+    else if (encoding == 4)
+    {
+      v = pow(v, float3{2.6f, 2.6f, 2.6f});
+    }
+    else if (encoding == 5)
+    {
+      v = ST2084_to_linear(v);
+    }
+
+    // default Linear scaling to our reference Luminace
+    return v * referenceLuminance;
+  }
+
+  float3 luminanceToEncoding(int encoding, float3 v)
+  {
+    v = v / referenceLuminance;
+
+    if (encoding == 1)
+    {
+      return linear_to_ACEScct3(v);
+    }
+    else if (encoding == 2)
+    {
+      return linear_to_sRGB3(v);
+    }
+    else if (encoding == 3)
+    {
+      return pow(v, float3{1.0f / 2.4f, 1.0f / 2.4f, 1.0f / 2.4f});
+    }
+    else if (encoding == 4)
+    {
+      return pow(v, float3{1.0f / 2.6f, 1.0f / 2.6f, 1.0f / 2.6f});
+    }
+    else if (encoding == 5)
+    {
+      return linear_to_ST2084(v);
+    }
+
+    // default Linear scaling to our reference Luminace
+    return v;
+  }
+
+  // multiplies a 3D vector with a 3x3 matrix
+  float3 vector_dot(float3x3 m, float3 v)
+  {
+    float3 r;
+    for (int c = 0; c < 3; c++)
+    {
+      r[c] = m[c][0] * v.x + m[c][1] * v.y + m[c][2] * v.z;
+    }
+
+    return r;
+  }
+
+  void process()
+  {
+    SampleType(src) source = src();
+    float3 input(source.x, source.y, source.z);
+    float3 RGB;
+    float3 out;
+
+    if (invert)
+    {
+      RGB = vector_dot(XYZ_to_RGB, input);
+      out = luminanceToEncoding(encoding, RGB);
+    }
+    else
+    {
+      RGB = encodingToLuminance(encoding, input);
+      out = vector_dot(RGB_to_XYZ, RGB);
+    }
+    dst() = float4(out.x, out.y, out.z, source.w);
+  }
+};
