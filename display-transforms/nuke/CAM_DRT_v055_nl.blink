@@ -858,16 +858,16 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
   // convert XYZ tristimulus values to the CAM J (lightness), M (colorfulness) and h (hue) correlates
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 XYZ_to_JMh(float3 XYZ, float3 referenceWhite, int viewingConditions, float _L_A, float Y_b, bool discountIlluminant, bool HK_mode, int stage)
+  inline float3 XYZ_to_JMh(float3 XYZ, int viewingConditions, bool HK_mode, int stage)
   {
-    return XYZ_to_Hellwig2022_JMh(XYZ, referenceWhite, _L_A, Y_b, viewingConditionsToSurround(viewingConditions), discountIlluminant, HK_mode, stage);
+    return XYZ_to_Hellwig2022_JMh(XYZ, viewingConditionsToSurround(viewingConditions), HK_mode, stage);
   }
 
   // convert the CAM J (lightness), M (colorfulness) and h (hue) correlates to XYZ tristimulus values
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 JMh_to_XYZ(float3 JMh, float3 referenceWhite, int viewingConditions, float _L_A, float Y_b, bool discountIlluminant, bool HK_mode, int stage)
+  inline float3 JMh_to_XYZ(float3 JMh, int viewingConditions, bool HK_mode, int stage)
   {
-    return Hellwig2022_JMh_to_XYZ(JMh, referenceWhite, _L_A, Y_b, viewingConditionsToSurround(viewingConditions), discountIlluminant, HK_mode, stage);
+    return Hellwig2022_JMh_to_XYZ(JMh, viewingConditionsToSurround(viewingConditions), HK_mode, stage);
   }
 
   // convert ST2084 PQ encoded values to linear
@@ -983,7 +983,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   {
     float3 luminanceRGB = encodingToLuminance3(encodingOut, RGB);
     float3 XYZ          = vector_dot(RGB_to_XYZ_output, luminanceRGB);
-    float3 JMh          = XYZ_to_JMh(XYZ, limitWhite, viewingConditions, L_A_out, Y_b_out, discountIlluminant_out, HK_mode_out, 2);
+    float3 JMh          = XYZ_to_JMh(XYZ, viewingConditions, HK_mode_out, 2);
     return JMh;
   }
 
@@ -991,14 +991,14 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   float3 luminance_RGB_to_JMh(float3 luminanceRGB)
   {
     float3 XYZ = vector_dot(RGB_to_XYZ_output, luminanceRGB);
-    float3 JMh = XYZ_to_JMh(XYZ, refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, HK_mode_mid, 1);
+    float3 JMh = XYZ_to_JMh(XYZ, outputViewingConditions, HK_mode_mid, 1);
     return JMh;
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
   float3 JMh_to_output_RGB(float3 JMh)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, HK_mode_out, 2);
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, outputViewingConditions, HK_mode_out, 2);
 
     // switch to treat incoming data as luminanceXYZ when in breakout mode
     if (diagnosticMode == 105)
@@ -1048,7 +1048,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
   float3 JMh_to_luminance_RGB(float3 JMh)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, HK_mode_mid, 1);
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, outputViewingConditions, HK_mode_mid, 1);
     float3 luminanceRGB = vector_dot(XYZ_to_RGB_output, luminanceXYZ);
 
     return luminanceRGB;
@@ -1059,14 +1059,14 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   {
     const float3 luminanceRGB = RGB * boundaryRGB * referenceLuminance;
     const float3 XYZ          = vector_dot(matrix, luminanceRGB);
-    const float3 JMh          = XYZ_to_JMh(XYZ, refWhite, viewingConditions, L_A, Y_b, discountIlluminant_mid, HK_mode_mid, 1);
+    const float3 JMh          = XYZ_to_JMh(XYZ, viewingConditions, HK_mode_mid, 1);
     return JMh;
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to linear RGB values with the given primaries
   float3 JMh_to_RGB(float3 JMh, const float3x3& matrix)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, refWhite, viewingConditions, L_A, Y_b, discountIlluminant_mid, HK_mode_mid, 1);
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, viewingConditions, HK_mode_mid, 1);
     float3 luminanceRGB = vector_dot(matrix, luminanceXYZ);
     float3 RGB          = luminanceRGB / boundaryRGB / referenceLuminance;
     return RGB;
@@ -1099,7 +1099,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   // - Eccentriticty factor has been removed
   // - Compress mode
   //
-  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, float3 XYZ_w, float _L_A, float Y_b, float3 surround, bool discountIlluminant, bool HK_mode, int stage)
+  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, float3 surround, bool HK_mode, int stage)
   {
         // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
@@ -1159,7 +1159,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     return {J, M, h};
   }
 
-  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, float3 XYZ_w, float _L_A, float Y_b, float3 surround, bool discountIlluminant, bool HK_mode, int stage)
+  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, float3 surround, bool HK_mode, int stage)
   {
     float J = JMh.x;
     const float M = JMh.y;
@@ -1602,7 +1602,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
       luminanceXYZ   = vector_dot(AP1_to_XYZ, luminanceRGB);
     }
 
-    float3 JMh = XYZ_to_JMh(luminanceXYZ, inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, HK_mode_in, 0);
+    float3 JMh = XYZ_to_JMh(luminanceXYZ, viewingConditions, HK_mode_in, 0);
 
     if (diagnosticMode == 6 || diagnosticMode == 100)
     {
@@ -1616,7 +1616,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
   float3 JMh_to_input_RGB(float3 JMh)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, HK_mode_in, 0);
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, viewingConditions, HK_mode_in, 0);
     float3 luminanceRGB = vector_dot(XYZ_to_RGB_input, luminanceXYZ);
     float3 inputRGB     = luminanceToEncoding3(encodingIn, luminanceRGB);
 
@@ -2438,9 +2438,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     initialise_cusp_table(gamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit);
     initialise_reach_cusp_table(gamutCuspTableReach, gamutCuspTableSize, limitJmax, XYZ_to_RGB_reach);
 
-    midJ = XYZ_to_JMh(refWhite * daniele_c_t * mmScaleFactor, refWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_mid,
-                      HK_mode_mid, 1)
-             .x;
+    midJ = XYZ_to_JMh(refWhite * daniele_c_t * mmScaleFactor, outputViewingConditions, HK_mode_mid, 1).x;
 
     initialise_upper_hull_gamma();
     initialise_lower_hull_gamma();
@@ -2913,7 +2911,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 26)
     {
       // XYZ back to luminance RGB
-      float3 JMh = JMh_to_XYZ(srcRGB, limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, HK_mode_out, 2);
+      float3 JMh = JMh_to_XYZ(srcRGB, outputViewingConditions, HK_mode_out, 2);
       diagnostic = vector_dot(XYZ_to_RGB_limit, JMh);
     }
     else if (diagnosticMode == 27)
@@ -2947,7 +2945,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 102)
     {
       // convert luminanceXYZ to JMh
-      diagnostic = XYZ_to_JMh(srcRGB, inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, HK_mode_in, 0);
+      diagnostic = XYZ_to_JMh(srcRGB, viewingConditions, HK_mode_in, 0);
     }
     else if (diagnosticMode == 103)
     {
@@ -2962,7 +2960,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 105)
     {
       // JMh to luminance XYZ
-      diagnostic = JMh_to_XYZ(srcRGB, limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, HK_mode_out, 2);
+      diagnostic = JMh_to_XYZ(srcRGB, outputViewingConditions, HK_mode_out, 2);
     }
     else if (diagnosticMode == 106)
     {
@@ -2990,7 +2988,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 202)
     {
       // output XYZ to JMh
-      diagnostic = XYZ_to_JMh(srcRGB, limitWhite, viewingConditions, L_A_out, Y_b_out, discountIlluminant_out, HK_mode_out, 2);
+      diagnostic = XYZ_to_JMh(srcRGB, viewingConditions, HK_mode_out, 2);
     }
     else if (diagnosticMode == 203)
     {
@@ -3005,7 +3003,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 205)
     {
       // inverted JMh back to XYZ
-      diagnostic = JMh_to_XYZ(srcRGB, inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, HK_mode_in, 0);
+      diagnostic = JMh_to_XYZ(srcRGB, viewingConditions, HK_mode_in, 0);
     }
     else if (diagnosticMode == 206)
     {
