@@ -1628,11 +1628,11 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Viewing conditions dependent parameters (could be pre-calculated)
     const float _F_L  = F_L[stage];
     const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
-    const float A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
+    const float _A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
 
     const float F_L_Y = pow(_F_L * fabs(Y) / 100.0f, 0.42f);
 
-    return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / A_w, surround.y * z[stage]);
+    return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / _A_w, surround.y * z[stage]);
   }
 
   float Hellwig_J_to_Y(float J, float3 surround, int stage)
@@ -1640,9 +1640,9 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Viewing conditions dependent parameters (could be pre-calculated)
     const float _F_L  = F_L[stage];
     const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
-    const float A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
+    const float _A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
 
-    const float A = A_w * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
+    const float A = _A_w * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
 
     return sign(J) * 100.0f / _F_L * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
   }
