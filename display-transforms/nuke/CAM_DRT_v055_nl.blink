@@ -1101,41 +1101,12 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   //
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, float3 XYZ_w, float _L_A, float Y_b, float3 surround, bool discountIlluminant, bool HK_mode, int stage)
   {
-    XYZ_w = XYZ_w * XYZ_w_scaler;
-
-    // # Step 0
-    // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
-    float3 RGB_w = vector_dot(CAT_CAT16, XYZ_w);
-
-    // # Computing degree of adaptation :math:`D`.
-    float D = 1.0f;
-    if (!discountIlluminant)
-    {
-      D = clamp(degree_of_adaptation(surround.x, _L_A), 0, 1);
-    }
-
-    // # Viewing conditions dependent parameters
-
-    float n   = Y_b / XYZ_w.y;
-    float z   = 1.48 + sqrt(n);
-
-    float3 D_RGB  = D * XYZ_w.y / RGB_w + 1 - D;
-    float3 RGB_wc = D_RGB * RGB_w;
-    float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
-
-    // # Computing achromatic responses for the whitepoint.
-    float R_aw = RGB_aw.x;
-    float G_aw = RGB_aw.y;
-    float B_aw = RGB_aw.z;
-
-    float A_w = ra * R_aw + G_aw + ba * B_aw;
-
-    // # Step 1
+        // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
     float3 RGB = vector_dot(CAT_CAT16, XYZ);
 
     // # Step 2
-    float3 RGB_c = D_RGB * RGB;
+    float3 RGB_c = D_RGB[stage] * RGB;
 
     // # Step 3
     // # Applying forward post-adaptation non-linear response compression.
@@ -1160,18 +1131,18 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     // # Step 7
     // # Computing the correlate of *Lightness* :math:`J`.
-    float J = 100.0f * pow(A / A_w, surround.y * z);
+    float J = 100.0f * pow(A / A_w[stage], surround.y * z[stage]);
 
     // # Step 8
     // # Computing the correlate of *brightness* :math:`Q`.
-    // float Q = (2.0f / float(surround.y)) * (J / 100.0f) * A_w;
+    // float Q = (2.0f / float(surround.y)) * (J / 100.0f) * A_w[stage];
 
     // # Step 9
     // # Computing the correlate of *colourfulness* :math:`M`.
     float M = 43.0f * surround.z * sqrt(a * a + b * b);
 
     // # Computing the correlate of *chroma* :math:`C`.
-    float C = 35.0f * M / A_w;
+    float C = 35.0f * M / A_w[stage];
 
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * sdiv(M, Q);
@@ -1180,7 +1151,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     {
       // # *Helmholtz–Kohlrausch* Effect Extension.
       J = J + hue_angle_dependency_Hellwig2022(hr) * spow(C, 0.587f);
-      // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w;
+      // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w[stage];
     }
     
     if (J == 0.0f)
@@ -1191,70 +1162,42 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   float3 Hellwig2022_JMh_to_XYZ(float3 JMh, float3 XYZ_w, float _L_A, float Y_b, float3 surround, bool discountIlluminant, bool HK_mode, int stage)
   {
     float J = JMh.x;
-    float M = JMh.y;
-    float h = JMh.z;
-    XYZ_w   = XYZ_w * XYZ_w_scaler;
-
-    // # Step 0
-    // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
-    float3 RGB_w = vector_dot(CAT_CAT16, XYZ_w);
-
-    // # Computing degree of adaptation :math:`D`.
-    float D = 1.0f;
-    if (!discountIlluminant)
-    {
-      D = clamp(degree_of_adaptation(surround.x, _L_A), 0, 1);
-    }
-
-    // # Viewing conditions dependent parameters
-    float n   = Y_b / XYZ_w.y;
-    float z   = 1.48 + sqrt(n);
-
-    float3 D_RGB  = D * XYZ_w.y / RGB_w + 1 - D;
-    float3 RGB_wc = D_RGB * RGB_w;
-    float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
-
-    // # Computing achromatic responses for the whitepoint.
-    float R_aw = RGB_aw.x;
-    float G_aw = RGB_aw.y;
-    float B_aw = RGB_aw.z;
-    float A_w  = ra * R_aw + G_aw + ba * B_aw;
-
-    float hr = radians(h);
+    const float M = JMh.y;
+    const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
-    float C = (M * 35) / A_w;
+    const float C = (M * 35) / A_w[stage];
     if (HK_mode)
     {
       J = J - hue_angle_dependency_Hellwig2022(hr) * spow(C, 0.587f);
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
-    float A = A_w * spow(J / 100.0f, 1.0f / (surround.y * z));
+    const float A = A_w[stage] * spow(J / 100.0f, 1.0f / (surround.y * z[stage]));
 
     // # Computing *P_p_1* to *P_p_2*.
-    float P_p_1 = 43.0f * surround.z;
-    float P_p_2 = A;
+    const float P_p_1 = 43.0f * surround.z;
+    const float P_p_2 = A;
 
     // # Step 3
     // # Computing opponent colour dimensions :math:`a` and :math:`b`.
-    float gamma = M / P_p_1;
-    float a     = gamma * cos(hr);
-    float b     = gamma * sin(hr);
+    const float gamma = M / P_p_1;
+    const float a     = gamma * cos(hr);
+    const float b     = gamma * sin(hr);
 
     // # Step 4
     // # Applying post-adaptation non-linear response compression matrix.
-    float3 RGB_a = vector_dot(panlrcm, float3(P_p_2, a, b)) / 1403.0f;
+    const float3 RGB_a = vector_dot(panlrcm, float3(P_p_2, a, b)) / 1403.0f; // TODO shift this to matrix ?
 
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
     const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a, stage);
 
     // # Step 6
-    float3 RGB = RGB_c / D_RGB;
+    const float3 RGB = RGB_c / D_RGB[stage];
 
     // # Step 7
-    float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
+    const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
 
     return XYZ;
   }
@@ -2443,9 +2386,9 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     generate_panlrcm();
 
     achromatic_weights = float3(ra, 1.0f, ba);
-    precompute_hellwig(L_A, 0);
-    precompute_hellwig(L_A, 1);
-    precompute_hellwig(L_A_out, 2);
+    precompute_hellwig(inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, 0);
+    precompute_hellwig(refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, 1);
+    precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, 2);
     initialise_non_linearities();
 
     // solving the RGB cusp from JMh is very expensive
@@ -2505,11 +2448,38 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     initialise_cusp_table(gamutCuspTableAP1, gamutCuspTableSize, AP1_to_XYZ);
   }
 
-  void precompute_hellwig(const float _L_A, int stage)
+  void precompute_hellwig(float3 referenceWhite, int viewingConditions, float _L_A, float Y_b, bool discountIlluminant, int stage)
   {
+    const float3 surround = viewingConditionsToSurround(viewingConditions);
+
+    const float3 XYZ_w_scaled = referenceWhite * XYZ_w_scaler;
+
+    // # Step 0
+    // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
+    const float3 RGB_w = vector_dot(CAT_CAT16, XYZ_w_scaled);
+
+    // # Computing degree of adaptation :math:`D`.
+    if (!discountIlluminant)
+    {
+      float D = clamp(degree_of_adaptation(surround.x, _L_A), 0, 1);
+      D_RGB[stage] = D * XYZ_w_scaled.y / RGB_w + 1 - D;
+    }
+    else
+    {
+      D_RGB[stage] = XYZ_w_scaled.y / RGB_w;
+    }
+
     const float k  = 1.0f / (5.0f * _L_A + 1.0f);
     const float k4 = k * k * k * k;
     F_L[stage] = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f);
+
+    const float n = Y_b / XYZ_w_scaled.y;
+    z[stage]      = 1.48 + sqrt(n);
+
+    // # Computing achromatic responses for the whitepoint.
+    const float3 RGB_wc = D_RGB[stage] * RGB_w;
+    const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
+    A_w[stage] = dot(achromatic_weights, RGB_aw);
   }
 
   void initialise_non_linearity(int stage)
