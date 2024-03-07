@@ -141,7 +141,6 @@ param:
   // Gamut Compression Fuction Parameters
   // Threshold / min Limit / max Limit / Power
   float4 compressionFuncParams;
-  bool   sixAxisCompressionMode;
   float4 compressionFuncParamsR;
   float4 compressionFuncParamsY;
   float4 compressionFuncParamsG;
@@ -150,7 +149,9 @@ param:
   float4 compressionFuncParamsM;
   bool   Reachcompressmode;
   bool   reachNick;
-  bool   Locuscompressmode;
+
+  bool   sixAxisCompressionMode; // Unused
+  bool   Locuscompressmode; // Unused
 
   int   boundryIntersectionMethod;
   bool  disableUpperHullGamma;
@@ -309,9 +310,6 @@ local:
   float3 refWhite;
   float3 limitWhite;
 
-  // the maximum RGB value of the limiting gamut
-  float boundaryRGB;
-
   // the maximum lightness value of the limiting gamut
   float limitJmax;
 
@@ -330,7 +328,6 @@ local:
   float3 cgamutReachTable[360];
   float  gamutTopGamma[360];
   float  gamutBottomGamma[360];
-  float  LocusLimitMTable[360];
 
   // Hellwig 2022 constants
   float F_L[3];
@@ -358,6 +355,8 @@ local:
   float nl_a0[3];
   float nl_b_[3];
   float nl_average_roots[3];
+
+  float fitWhiteScale;
 
   void define()
   {
@@ -1008,14 +1007,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     // First matrix to limiting gamut for clamping
     float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ);
-
-    if (fitWhite)
-    {
-      // Scale to fit maximum creative white channel value
-      float3 creativeWhiteXYZ = vector_dot(RGB_to_XYZ_limit, float3(1.0f, 1.0f, 1.0f)); // TODO: these scaling parameters could be precalculated
-      float3 creativeWhiteRGB = vector_dot(XYZ_to_RGB_output, creativeWhiteXYZ);
-      luminanceRGB *= 1.0f / max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
-    }
+    luminanceRGB *= fitWhiteScale;
 
     if (softclampOutput)
     {
@@ -1057,7 +1049,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
   float3 RGB_to_JMh(const float3 RGB, const float3x3& matrix)
   {
-    const float3 luminanceRGB = RGB * boundaryRGB * referenceLuminance;
+    const float3 luminanceRGB = RGB * peakLuminance;
     const float3 XYZ          = vector_dot(matrix, luminanceRGB);
     const float3 JMh          = XYZ_to_JMh(XYZ, viewingConditions, HK_mode_mid, 1);
     return JMh;
@@ -1068,7 +1060,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   {
     float3 luminanceXYZ = JMh_to_XYZ(JMh, viewingConditions, HK_mode_mid, 1);
     float3 luminanceRGB = vector_dot(matrix, luminanceXYZ);
-    float3 RGB          = luminanceRGB / boundaryRGB / referenceLuminance;
+    float3 RGB          = luminanceRGB / peakLuminance;
     return RGB;
   }
 
@@ -1327,22 +1319,6 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     float cuspJ = lerp(lo.x, hi.x, t);
     float cuspM = lerp(lo.y, hi.y, t);
 
-    return float2(cuspJ, cuspM);
-  }
-
-  float2 cuspFromTableLocus(float h)
-  {
-    const int i_lo = hue_position_in_uniform_table(h, gamutCuspTableSize);
-    const int i_hi = next_position_in_table(i_lo, gamutCuspTableSize);
-
-    const float lo = LocusLimitMTable[i_lo];
-    const float hi = LocusLimitMTable[i_hi];
-
-    const float base_hue = base_hue_for_position(i_lo, gamutCuspTableSize);
-    const float t        = h - base_hue;
-
-    const float cuspJ = 69;
-    const float cuspM = lerp(lo, hi, t);
     return float2(cuspJ, cuspM);
   }
 
@@ -1848,17 +1824,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     return float2(yi, xi);
   }
 
-  float3 getLocusBoundry(float3 Jmh)
-  {
-    float h = Jmh.z;
-
-    float2 cuspLocus     = cuspFromTableLocus(h);
-    float  cuspTarget100 = cuspLocus.y;
-    float  cuspTarget    = cuspTarget100 * pow((Jmh.x / 100.0f), model_gamma);
-    float  difference    = cuspLocus.y / cuspTarget;
-    return float3(Jmh.x, cuspTarget, Jmh.z);
-  }
-
   float3 getReachBoundry(float3 Jmh)
   {
     const float h = Jmh.z;
@@ -1896,80 +1861,15 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
   float4 getCompressionFuncParams(float3 Jmh)
   {
-    float h = Jmh.z;
-
-    float angleR = 20.0f;
-    float angleY = 102.0f;
-    float angleG = 146.0f;
-    float angleC = 193.0f;
-    float angleB = 259.0f;
-    float angleM = 342.0f;
-
-    float lerpVal = 0.0f;
-
     if (Reachcompressmode)
     {
-      if (primariesReach != 6) // All of the primary based reach values
-      {
-        // use primary based reach
-        float locusMax   = getReachBoundry(Jmh).y;
-        float difference = max(1.0001f, locusMax / Jmh.y);
-        float threshold  = max(compressionFuncParams.x, 1.0f / difference);
-        return float4(threshold, difference, difference, compressionFuncParams.w);
-      }
-      else
-      {
-        // use locus based reach
-        float locusMax   = getLocusBoundry(Jmh).y;
-        float difference = locusMax / Jmh.y;
-        return float4(compressionFuncParams.x, difference, difference, compressionFuncParams.w);
-      }
+      // use primary based reach
+      float locusMax   = getReachBoundry(Jmh).y;
+      float difference = max(1.0001f, locusMax / Jmh.y);
+      float threshold  = max(compressionFuncParams.x, 1.0f / difference);
+      return float4(threshold, difference, difference, compressionFuncParams.w);
     }
-
-    if (!sixAxisCompressionMode)
-      return compressionFuncParams;
-    else
-    {
-      if (h >= angleR && h < angleY)
-      {
-        lerpVal = (h - angleR) / (angleY - angleR);
-        return lerp(compressionFuncParamsR, compressionFuncParamsY, lerpVal);
-      }
-      if (h >= angleY && h < angleG)
-      {
-        lerpVal = (h - angleY) / (angleG - angleY);
-        return lerp(compressionFuncParamsY, compressionFuncParamsG, lerpVal);
-      }
-      if (h >= angleG && h < angleC)
-      {
-        lerpVal = (h - angleG) / (angleC - angleG);
-        return lerp(compressionFuncParamsG, compressionFuncParamsC, lerpVal);
-      }
-      if (h >= angleC && h < angleB)
-      {
-        lerpVal = (h - angleC) / (angleB - angleC);
-        return lerp(compressionFuncParamsC, compressionFuncParamsB, lerpVal);
-      }
-      if (h >= angleB && h < angleM)
-      {
-        lerpVal = (h - angleB) / (angleM - angleB);
-        return lerp(compressionFuncParamsB, compressionFuncParamsM, lerpVal);
-      }
-      if (h >= angleM && h < angleR + 360.0f)
-      {
-        lerpVal = (h - angleM) / (angleR + 360.0f - angleM);
-        return lerp(compressionFuncParamsM, compressionFuncParamsR, lerpVal);
-      }
-      if (h < angleR)
-      {
-        lerpVal = (h + 360.0f - angleM) / (angleR + 360.0f - angleM);
-        return lerp(compressionFuncParamsM, compressionFuncParamsR, lerpVal);
-      }
-      else
-      {
-        return compressionFuncParams;
-      }
-    }
+    return compressionFuncParams;
   }
 
   // https://www.desmos.com/calculator/oe2fscya80
@@ -2216,7 +2116,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     daniele_m_2    = daniele_m_1 / daniele_u_2;
 
     // 1.0f / (c * z)
-    model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * (1.48f + sqrt(Y_b_out / L_A_out)));
+    model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
 
     // Chroma compression scaling for HDR/SDR appearance match
     float log_peak = log10(daniele_n / daniele_n_r);
@@ -2244,46 +2144,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       0.656619, 0.342071, 0.00131062, -0.222571, 1.10658, 0.115987, -0.000634146, 0.05855, 0.942084,
     };
 
-    // M Max data generated via an external Nukescript at a J value of 100
-    float LocusLimitMTable_data[] = {
-      244.8230133, 245.4952393, 246.4431458, 247.1381531, 247.2368927, 246.8459778, 245.7083588, 244.2591095, 242.5463409, 240.4208374,
-      238.0180511, 235.4039917, 233.010849,  230.4004669, 227.8723602, 225.2279968, 222.7197876, 214.8562622, 206.1778564, 198.0664215,
-      190.9799347, 184.005127,  177.7472992, 172.2332611, 166.6447754, 161.64534,   156.9872284, 152.6203003, 148.3236084, 144.2987976,
-      140.8540192, 137.4315033, 134.3281555, 131.2306366, 128.3477631, 125.8098145, 123.1305542, 120.5120163, 118.3302231, 116.127861,
-      114.0526428, 112.1633072, 110.2943344, 108.4250336, 106.711853,  105.188797,  103.6860809, 102.2319641, 100.8348923, 99.51873779,
-      98.26163483, 97.04810333, 95.90451813, 94.84623718, 93.86389923, 92.9352951,  92.03639984, 91.15013885, 90.27630615, 89.43255615,
-      88.63536072, 87.8986969,  87.23329163, 86.63896942, 86.09989166, 85.60071564, 85.12715912, 84.66781616, 84.21458435, 83.76491547,
-      83.30849457, 82.86478424, 82.46378326, 82.11483002, 81.82078552, 81.58016968, 81.37005615, 81.18525696, 81.01979065, 80.86772156,
-      80.72546387, 80.59381104, 80.48122406, 80.40287018, 80.33755493, 80.30010986, 80.28891754, 80.28807831, 80.33933258, 80.44513702,
-      80.57379913, 80.71469879, 80.86810303, 81.03874207, 81.23072052, 81.44044495, 81.6555481,  81.901474,   82.20778656, 82.67211151,
-      83.1408844,  83.62628174, 84.0898056,  84.53721619, 84.99518585, 85.49137878, 86.03423309, 86.58794403, 87.16802979, 87.72124481,
-      88.51965332, 89.35781097, 90.16739655, 90.94639587, 91.75927734, 92.65882111, 93.6033783,  94.64561462, 95.68405914, 96.84765625,
-      97.98625183, 99.09587097, 100.2806396, 101.5832748, 103.0694122, 104.6378632, 106.2420197, 107.8503952, 109.5214844, 111.3000031,
-      113.1901169, 115.1414337, 117.1432114, 119.3193054, 121.7141724, 124.2319031, 126.4584961, 128.9876556, 131.6906891, 134.7160034,
-      137.8343048, 140.7224121, 143.7820892, 147.23909,   150.6812439, 154.0381317, 157.1765747, 160.5133972, 164.2957306, 168.1366272,
-      171.8247986, 175.4206543, 179.2828827, 182.0374146, 185.0783844, 188.2106171, 190.9611206, 193.3639221, 195.5132294, 197.58255,
-      199.4234161, 201.3786011, 203.1474609, 205.016037,  206.6236725, 208.1813812, 209.8205719, 211.2774353, 212.8192749, 214.4571686,
-      215.6442261, 216.4818726, 217.1617279, 217.7372131, 218.2023926, 218.4073486, 218.4278564, 217.6643677, 216.4666748, 215.1212463,
-      213.8158264, 212.5012817, 210.8331757, 208.8956146, 206.9006958, 204.9239197, 203.0310059, 201.2084045, 199.3484344, 197.3464355,
-      195.217453,  193.0449677, 190.9578705, 188.9528656, 187.0009918, 185.0068817, 182.9402924, 180.8367767, 178.7057037, 176.5325165,
-      174.445282,  172.4908905, 170.5744934, 168.5490723, 166.459259,  164.4333649, 162.5092621, 160.4579468, 158.491806,  156.6880035,
-      155.0045624, 153.295166,  151.4545441, 149.5910492, 147.7821808, 146.4078522, 144.8022614, 143.2662506, 141.8236542, 140.5029602,
-      139.225174,  137.8959045, 136.4792175, 135.0780334, 133.7389374, 132.7613525, 131.6787109, 130.6356354, 129.64328,   128.7269897,
-      127.8450623, 126.9439697, 126.0015182, 125.0760727, 124.1718826, 123.4704056, 122.8062363, 122.1408768, 121.501358,  120.9004822,
-      120.3225555, 119.7514191, 119.2011871, 118.7055511, 118.2950592, 117.9416199, 117.5793762, 117.2029953, 116.8356552, 116.4874039,
-      116.1693954, 115.9030762, 115.6935577, 115.5213852, 115.3659363, 115.2032318, 115.0445251, 114.9317932, 114.8815384, 114.8605118,
-      114.8510284, 114.8482819, 114.848465,  114.8521805, 114.8999329, 115.0081787, 115.1483612, 115.2983322, 115.511528,  115.7195816,
-      115.9448853, 116.2098999, 116.5264893, 116.8126144, 117.1579666, 117.5379944, 117.9048004, 118.3263168, 118.8006821, 119.2988586,
-      119.8310318, 120.3776703, 121.0383987, 121.6810684, 122.4489899, 123.207077,  124.071022,  124.9082108, 125.74823,   126.6865311,
-      127.4425888, 127.8552094, 128.1067963, 128.3630676, 128.6606598, 128.9203491, 129.2632141, 129.708252,  130.1131287, 130.5647278,
-      130.9923553, 131.5979462, 132.2623444, 132.8651428, 133.4651947, 134.1470337, 134.8683624, 135.683609,  136.6136017, 137.5203552,
-      138.3826599, 139.2931976, 140.2762299, 141.2150574, 142.3930054, 143.7060547, 145.0472565, 146.3404083, 147.6144257, 148.9406586,
-      150.3545532, 151.8509674, 153.4246826, 155.0567017, 156.7265472, 158.4546509, 160.2428131, 162.1348267, 164.1415863, 166.2302551,
-      168.4024506, 170.5583649, 172.6457672, 174.9460449, 177.2792664, 179.6472473, 182.1867218, 184.5882721, 187.3068848, 189.8807373,
-      192.5116577, 195.5551453, 198.5196381, 201.3429413, 203.941452,  206.8439484, 209.5599213, 212.4866943, 215.0750885, 217.929306,
-      220.6668701, 223.364151,  226.2115479, 228.9524536, 231.5583954, 234.405304,  237.0275879, 239.5091705, 242.0047455, 242.0177155};
-
-    // populate the input primaries matrix
+   // populate the input primaries matrix
     RGB_to_XYZ_input = generate_RGB_to_XYZ_matrix(primariesIn);
     XYZ_to_RGB_input = RGB_to_XYZ_input.invert();
 
@@ -2363,8 +2224,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     refWhite   = vector_dot(RGB_to_XYZ_limit, white);
     limitWhite = vector_dot(RGB_to_XYZ_limit, white); // TODO; could ref and limit be different?
 
-    boundaryRGB = peakLuminance / referenceLuminance;
-
     if (catDataSelection == 0)
     {
       CAT_CAT16.setArray(CAT_CAT16_data);
@@ -2386,15 +2245,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     precompute_hellwig(refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, 1);
     precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, 2);
     initialise_non_linearities();
-
-    // solving the RGB cusp from JMh is very expensive
-    // instead we go the other way and start with a RGB cusp sweep
-    // which is easily calculated by converting via HSV (Hue, 1.0, 1.0)
-    // we then convert each cusp to JMh and add them to a table
-    for (int i = 0; i < gamutCuspTableSize; ++i)
-    {
-      LocusLimitMTable[i] = LocusLimitMTable_data[i];
-    }
 
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
@@ -2440,6 +2290,20 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     initialise_lower_hull_gamma();
 
     initialise_cusp_table(gamutCuspTableAP1, gamutCuspTableSize, AP1_to_XYZ);
+
+    fitWhiteScale = 1.0f;
+    if (fitWhite)
+    {
+      // Scale to fit maximum creative white channel value
+      float3 creativeWhiteXYZ = vector_dot(RGB_to_XYZ_limit, float3(1.0f, 1.0f, 1.0f)); // TODO: these scaling parameters could be precalculated
+      float3 creativeWhiteRGB = vector_dot(XYZ_to_RGB_output, creativeWhiteXYZ);
+      fitWhiteScale = 1.0f / max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
+    }
+  }
+
+  inline float compute_base_exponential_nonlinearity(float Y_backgrounf, float Y_white)
+  {
+    return 1.48f + sqrt(Y_backgrounf / Y_white);
   }
 
   void precompute_hellwig(float3 referenceWhite, int viewingConditions, float _L_A, float Y_b, bool discountIlluminant, int stage)
@@ -2467,8 +2331,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float k4 = k * k * k * k;
     F_L[stage] = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f);
 
-    const float n = Y_b / XYZ_w_scaled.y;
-    z[stage]      = 1.48 + sqrt(n);
+    z[stage] = compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
 
     // # Computing achromatic responses for the whitepoint.
     const float3 RGB_wc = D_RGB[stage] * RGB_w;
@@ -2833,17 +2696,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       // output AP1 cusp
       const float2 JMcusp = cuspFromTableAP1(srcRGB.z);
       diagnostic          = float3(JMcusp.x, JMcusp.y, srcRGB.z);
-    }
-    else if (diagnosticMode == 16)
-    {
-      // output Locus cusp
-      const float2 JMcusp = cuspFromTableLocus(srcRGB.z);
-      diagnostic          = float3(JMcusp.x, JMcusp.y, srcRGB.z);
-    }
-    else if (diagnosticMode == 17)
-    {
-      // output Locus boundary
-      diagnostic = getLocusBoundry(srcRGB);
     }
     else if (diagnosticMode == 18)
     {
