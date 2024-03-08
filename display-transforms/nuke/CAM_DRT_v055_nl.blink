@@ -452,11 +452,6 @@ local:
     return v;
   }
 
-  float3 float3spow(float3 base, float exponent)
-  {
-    return float3(spow(base.x, exponent), spow(base.y, exponent), spow(base.z, exponent));
-  }
-
   inline float3 float3pow(float3 base, float exponent)
   {
     return float3(pow(base.x, exponent), pow(base.y, exponent), pow(base.z, exponent));
@@ -619,7 +614,7 @@ local:
   // convert ACEScct encoded values to linear
   float ACEScct_to_linear(float v)
   {
-    return v > 0.155251141552511f ? spow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;
+    return v > 0.155251141552511f ? pow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;
   }
 
   // encode linear values as ACEScct
@@ -631,13 +626,13 @@ local:
   // convert sRGB gamma encoded values to linear
   float sRGB_to_linear(float v)
   {
-    return v < 0.04045f ? v / 12.92f : spow((v + 0.055f) / 1.055f, 2.4f);
+    return v < 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);
   }
 
   // encode linear values as sRGB gamma
   float linear_to_sRGB(float v)
   {
-    return v <= 0.0031308f ? 12.92f * v : 1.055 * (spow(v, 1.0f / 2.4f)) - 0.055f;
+    return v <= 0.0031308f ? 12.92f * v : 1.055 * (pow(v, 1.0f / 2.4f)) - 0.055f;
   }
 
   float3 post_adaptation_non_linear_response_compression_forward_original(float3 RGB, int stage)
@@ -872,15 +867,15 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   // convert ST2084 PQ encoded values to linear
   float ST2084_to_linear(float v)
   {
-    float V_p = spow(v, st2084_m_2_d);
-    return spow((max(0.0f, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;
+    float V_p = pow(v, st2084_m_2_d);
+    return pow((max(0.0f, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;
   }
 
   // encode linear values as ST2084 PQ
   float linear_to_ST2084(float v)
   {
-    float Y_p = spow(max(0.0f, v) / st2084_L_p, st2084_m_1);
-    return spow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);
+    float Y_p = pow(max(0.0f, v) / st2084_L_p, st2084_m_1);
+    return pow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);
   }
 
   // decode value 'v' with the inverse of the selected encoding fuction to luminance
@@ -899,12 +894,12 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     else if (encoding == 3)
     {
       // BT.1886 (Gamma 2.4)
-      return spow(v, 2.4f) * referenceLuminance;
+      return pow(v, 2.4f) * referenceLuminance;
     }
     else if (encoding == 4)
     {
       // Gamma 2.6
-      return spow(v, 2.6f) * referenceLuminance;
+      return pow(v, 2.6f) * referenceLuminance;
     }
     else if (encoding == 5)
     {
@@ -946,12 +941,12 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     else if (encoding == 3)
     {
       // BT.1886 (Gamma 2.4)
-      return spow(v / referenceLuminance, 1.0f / 2.4f);
+      return pow(v / referenceLuminance, 1.0f / 2.4f);
     }
     else if (encoding == 4)
     {
       // Gamma 2.6
-      return spow(v / referenceLuminance, 1.0f / 2.6f);
+      return pow(v / referenceLuminance, 1.0f / 2.6f);
     }
     else if (encoding == 5)
     {
@@ -1110,16 +1105,16 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     float R_a = RGB_a.x;
     float G_a = RGB_a.y;
     float B_a = RGB_a.z;
-    float a   = R_a - 12.0f * G_a / 11.0f + B_a / 11.0f;
+    float a   = R_a - 12.0f * G_a / 11.0f + B_a / 11.0f; // TODO: dot products
     float b   = (R_a + G_a - 2.0f * B_a) / 9.0f;
 
     // # Computing the *hue* angle :math:`h`.
-    float hr = atan2(b, a);
-    float h  = wrap_to_360(degrees(hr));
+    const float hr = atan2(b, a);
+    const float h  = wrap_to_360(degrees(hr));
 
     // # Step 6
     // # Computing achromatic responses for the stimulus.
-    float A = dot(achromatic_weights, RGB_a);
+    const float A = dot(achromatic_weights, RGB_a);
 
     // # Step 7
     // # Computing the correlate of *Lightness* :math:`J`.
@@ -1133,16 +1128,15 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     // # Computing the correlate of *colourfulness* :math:`M`.
     float M = 43.0f * surround.z * sqrt(a * a + b * b);
 
-    // # Computing the correlate of *chroma* :math:`C`.
-    float C = 35.0f * M / A_w[stage];
-
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * sdiv(M, Q);
   
     if (HK_mode)
     {
+      // # Computing the correlate of *chroma* :math:`C`.
+      const float C = 35.0f * M / A_w[stage];
       // # *Helmholtz–Kohlrausch* Effect Extension.
-      J = J + hue_angle_dependency_Hellwig2022(hr) * spow(C, 0.587f);
+      J = J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
       // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w[stage];
     }
     
@@ -1161,11 +1155,11 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     const float C = (M * 35) / A_w[stage];
     if (HK_mode)
     {
-      J = J - hue_angle_dependency_Hellwig2022(hr) * spow(C, 0.587f);
+      J = J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
-    const float A = A_w[stage] * spow(J / 100.0f, 1.0f / (surround.y * z[stage]));
+    const float A = A_w[stage] * pow(J / 100.0f, 1.0f / (surround.y * z[stage]));
 
     // # Computing *P_p_1* to *P_p_2*.
     const float P_p_1 = 43.0f * surround.z;
@@ -1604,22 +1598,20 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Viewing conditions dependent parameters (could be pre-calculated)
     const float _F_L  = F_L[stage];
     const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
-    const float _A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
+    const float _A_w  = (400.0f * F_L_W) / (27.13f + F_L_W);
 
     const float F_L_Y = pow(_F_L * fabs(Y) / 100.0f, 0.42f);
-
     return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / _A_w, surround.y * z[stage]);
   }
 
   float Hellwig_J_to_Y(float J, float3 surround, int stage)
   {
     // Viewing conditions dependent parameters (could be pre-calculated)
-    const float _F_L  = F_L[stage];
-    const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
+    const float _F_L   = F_L[stage];
+    const float F_L_W  = pow(_F_L, 0.42f); // TODO: fix me
     const float _A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
 
     const float A = _A_w * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
-
     return sign(J) * 100.0f / _F_L * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
   }
 
@@ -1776,12 +1768,12 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Scale the cusp outward when smoothing to avoid reducing the gamut.  Reduce
     // smoothing for high cusps because smin() will bias it too much for the longer line.
     float s = max(lerp(smoothing, smoothing * 0.05f, cusp.x / limitJmax), 0.0001f);
-    cusp.y *= 1.0f + 0.18f * s;
+    cusp.y *= 1.0f + 0.18f * s; // TODO: magic numbers
     cusp.x *= 1.0f + 0.07f * s;
 
     // Line below the cusp is curved with model_gamma
-    float toJ_gamma   = cusp.x * spow(to.x / cusp.x, model_gamma);
-    float fromJ_gamma = cusp.x * spow(from.x / cusp.x, model_gamma);
+    float toJ_gamma   = cusp.x * pow(to.x / cusp.x, model_gamma);
+    float fromJ_gamma = cusp.x * pow(from.x / cusp.x, model_gamma);
     t0                = cusp.y * toJ_gamma / (from.y * cusp.x + cusp.y * (toJ_gamma - fromJ_gamma));
 
     // Line above the cusp
@@ -1801,7 +1793,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     float f  = 1.0;
     float mf = m * f;
     float xi = 1.0f;
-    float g1 = 1.0f / model_gamma;
+    float g1 = 1.0f / model_gamma; // TODO: hue dependent?
     float g2 = hueDependantUpperHullGamma(h);
 
     if (m * xc + c < yc)
