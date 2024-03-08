@@ -1673,32 +1673,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     return float3(J_boundary, M_boundary, J_intersect_source);
   }
 
-  // Approximation of the gamut intersection to a curved and smoothened triangle
-  // along the projection line 'from -> to'.
-  float2 find_gamut_intersection(float2 cusp, float2 from, float2 to, float smoothing)
-  {
-    float t0, t1;
-
-    // Scale the cusp outward when smoothing to avoid reducing the gamut.  Reduce
-    // smoothing for high cusps because smin() will bias it too much for the longer line.
-    float s = max(lerp(smoothing, smoothing * 0.05f, cusp.x / limitJmax), 0.0001f);
-    cusp.y *= 1.0f + 0.18f * s; // TODO: magic numbers
-    cusp.x *= 1.0f + 0.07f * s;
-
-    // Line below the cusp is curved with model_gamma
-    float toJ_gamma   = cusp.x * pow(to.x / cusp.x, model_gamma);
-    float fromJ_gamma = cusp.x * pow(from.x / cusp.x, model_gamma);
-    t0                = cusp.y * toJ_gamma / (from.y * cusp.x + cusp.y * (toJ_gamma - fromJ_gamma));
-
-    // Line above the cusp
-    t1 = cusp.y * (to.x - limitJmax) / (from.y * (cusp.x - limitJmax) + cusp.y * (to.x - from.x));
-
-    // Smooth minimum to smooth the cusp
-    t1 = smin(fabs(t0), fabs(t1), s);
-
-    return float2(to.x * (1.0f - t1) + t1 * from.x, t1 * from.y);
-  }
-
   float3 getReachBoundry(float3 Jmh)
   {
     const float h = Jmh.z;
