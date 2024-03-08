@@ -1661,10 +1661,10 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       slope = (J_max - J_intersect_source) * (J_intersect_source - J_focus) / (J_focus * slope_gain);
     }
 
-    float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, 1 / gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
+    float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
 
     float M_boundary_upper = JM_cusp.y * (J_max - J_intersect_cusp)
-      * pow((J_max - J_intersect_source) / (J_max - J_intersect_cusp), 1.0f / gamma_top) / (slope * JM_cusp.y + J_max - JM_cusp.x);
+      * pow((J_max - J_intersect_source) / (J_max - J_intersect_cusp), gamma_top) / (slope * JM_cusp.y + J_max - JM_cusp.x);
 
     float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, s);
 
@@ -2303,7 +2303,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       if (disableUpperHullGamma)
       {
-        gamutGammas[i].x = upperHullGamma;
+        gamutGammas[i].x = 1.0f / upperHullGamma;
         continue;
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
@@ -2346,7 +2346,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
           low = testGamma;
         }
       }
-      gamutGammas[i].x = testGamma;
+      gamutGammas[i].x = 1.0f / testGamma;
     }
   }
 
@@ -2390,7 +2390,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       if (disableLowerHullGamma)
       {
-        gamutGammas[i].y = lowerHullGamma;
+        gamutGammas[i].y = 1.0f / lowerHullGamma;
         continue;
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
@@ -2432,7 +2432,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
           low = testGamma;
         }
       }
-      gamutGammas[i].y = testGamma;
+      gamutGammas[i].y = 1.0f / testGamma;
     }
   }
 
