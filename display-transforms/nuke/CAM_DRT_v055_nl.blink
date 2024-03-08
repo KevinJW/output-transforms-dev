@@ -141,18 +141,18 @@ param:
   // Gamut Compression Fuction Parameters
   // Threshold / min Limit / max Limit / Power
   float4 compressionFuncParams;
-  float4 compressionFuncParamsR;
-  float4 compressionFuncParamsY;
-  float4 compressionFuncParamsG;
-  float4 compressionFuncParamsC;
-  float4 compressionFuncParamsB;
-  float4 compressionFuncParamsM;
-  bool   Reachcompressmode;
-  bool   reachNick;
+  float4 compressionFuncParamsR; // Unused
+  float4 compressionFuncParamsY; // Unused
+  float4 compressionFuncParamsG; // Unused
+  float4 compressionFuncParamsC; // Unused
+  float4 compressionFuncParamsB; // Unused
+  float4 compressionFuncParamsM; // Unused
+  bool   Reachcompressmode; // Unused
 
-  bool   sixAxisCompressionMode; // Unused
-  bool   Locuscompressmode; // Unused
-  int   boundryIntersectionMethod; // Unused
+  bool reachNick; // Unused
+  bool sixAxisCompressionMode; // Unused
+  bool Locuscompressmode; // Unused
+  int  boundryIntersectionMethod; // Unused
 
   bool  disableUpperHullGamma;
   bool  disableLowerHullGamma;
@@ -1728,39 +1728,22 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float t = (h - lo.z) / (hi.z - lo.z);
 
     const float reachMaxM = lerp(lo.y, hi.y, t);
-    if (reachNick)
-    {
-      float2 JMcusp     = cuspFromTable(Jmh.z);
-      float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-      float  slope_gain = limitJmax * focusDist * getFocusGain(Jmh.x, JMcusp.x);
-      float  intersectJ = solve_J_intersect(float2(Jmh.x, Jmh.y), focusJ, limitJmax, slope_gain);
-      float  slope;
-      if (intersectJ < focusJ)
-      {
-        slope = intersectJ * (intersectJ - focusJ) / (focusJ * slope_gain);
-      }
-      else
-      {
-        slope = (limitJmax - intersectJ) * (intersectJ - focusJ) / (focusJ * slope_gain);
-      }
-      float boundaryNick = limitJmax * pow(intersectJ / limitJmax, model_gamma) * reachMaxM / (limitJmax - slope * reachMaxM);
-      return float3(Jmh.x, boundaryNick, Jmh.z);
-    }
-    float cuspTarget = reachMaxM * pow((Jmh.x / limitJmax), model_gamma); // TODO: model_gamma used here ???
-    return float3(Jmh.x, cuspTarget, Jmh.z);
-  }
 
-  float4 getCompressionFuncParams(float3 Jmh)
-  {
-    if (Reachcompressmode)
+    float2 JMcusp     = cuspFromTable(Jmh.z);
+    float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
+    float  slope_gain = limitJmax * focusDist * getFocusGain(Jmh.x, JMcusp.x);
+    float  intersectJ = solve_J_intersect(float2(Jmh.x, Jmh.y), focusJ, limitJmax, slope_gain);
+    float  slope;
+    if (intersectJ < focusJ)
     {
-      // use primary based reach
-      float locusMax   = getReachBoundry(Jmh).y;
-      float difference = max(1.0001f, locusMax / Jmh.y); // TODO: magic threshold?
-      float threshold  = max(compressionFuncParams.x, 1.0f / difference);
-      return float4(threshold, difference, difference, compressionFuncParams.w);
+      slope = intersectJ * (intersectJ - focusJ) / (focusJ * slope_gain);
     }
-    return compressionFuncParams;
+    else
+    {
+      slope = (limitJmax - intersectJ) * (intersectJ - focusJ) / (focusJ * slope_gain);
+    }
+    float boundaryNick = limitJmax * pow(intersectJ / limitJmax, model_gamma) * reachMaxM / (limitJmax - slope * reachMaxM);
+    return float3(Jmh.x, boundaryNick, Jmh.z);
   }
 
   // https://www.desmos.com/calculator/oe2fscya80
@@ -1809,8 +1792,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
   float3 compressGamut2(float3 JMh, int invert, float Jx)
   {
-    float2 project_from = float2(JMh.x, JMh.y);
-    float2 JMcusp       = cuspFromTable(JMh.z);
+    const float2 project_from = float2(JMh.x, JMh.y);
 
     if (!applyGamutCompression)
       return JMh;
@@ -1818,48 +1800,24 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       return JMh;
 
     // Calculate where the out of gamut color is projected to
-    float focusJ = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-
-    // https://www.desmos.com/calculator/9u0wiiz9ys
-    float Mratio = project_from.y / (focusDist * JMcusp.y);
-    float a      = max(0.001f, Mratio / focusJ); // TODO: threshold
-    float b0     = 1.0f - Mratio;
-    float b1     = -(1.0f + Mratio + (a * limitJmax));
-    float b      = project_from.x < focusJ ? b0 : b1;
-    float c0     = -project_from.x;
-    float c1     = project_from.x + limitJmax * Mratio;
-    float c      = project_from.x < focusJ ? c0 : c1;
-
-    // XXX this sqrt can cause NaNs (subtraction goes negative)
-    float J0       = sqrt(b * b - 4 * a * c);
-    float J1       = (-b - J0) / (2 * a);
-    J0             = (-b + J0) / (2 * a);
-    float projectJ = project_from.x < focusJ ? J0 : J1;
-
-    float slope_gain = limitJmax * focusDist * getFocusGain(Jx, JMcusp.x);
-
+    float2 JMcusp     = cuspFromTable(JMh.z);
+    float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
+    float  slope_gain = limitJmax * focusDist * getFocusGain(Jx, JMcusp.x);
+  
     // Find gamut intersection 
     float  gamma_top         = hueDependantUpperHullGamma(JMh.z);
     float  gamma_bottom      = hueDependantLowerHullGamma(JMh.z);
     float3 nickBoundryReturn = findGamutBoundaryIntersection(JMh, JMcusp, focusJ, limitJmax, slope_gain, smoothCusps, gamma_top, gamma_bottom);
     float2 JMboundary        = float2(nickBoundryReturn.x, nickBoundryReturn.y);
     float2 project_to        = float2(nickBoundryReturn.z, 0.0f);
-    projectJ                 = nickBoundryReturn.z;
+    float  projectJ          = nickBoundryReturn.z;
 
     // Get hue dependent compression parameters
-    float4 interpolatedCompressionFuncParams;
-    if (reachNick)
-    {
-      interpolatedCompressionFuncParams = getCompressionFuncParams(float3(JMboundary.x, JMboundary.y, JMh.z));
-    }
-    else
-    {
-      interpolatedCompressionFuncParams = getCompressionFuncParams(float3(JMh.x, JMboundary.y, JMh.z));
-    }
-
-    if (!Reachcompressmode)
-      interpolatedCompressionFuncParams.x =
-        1.0f / lerp(interpolatedCompressionFuncParams.z, interpolatedCompressionFuncParams.y, projectJ / limitJmax);
+    const float3 JMh_boundary = float3(JMboundary.x, JMboundary.y, JMh.z);
+    float locusMax   = getReachBoundry(JMh_boundary).y;
+    float difference = max(1.0001f, locusMax / JMh_boundary.y); // TODO: magic threshold?
+    float threshold  = max(compressionFuncParams.x, 1.0f / difference);
+    float4 interpolatedCompressionFuncParams = float4(threshold, difference, difference, compressionFuncParams.w);
 
     // Compress the out of gamut color along the projection line
     float2 JMcompressed = project_from;
@@ -1879,10 +1837,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       JMcompressed = float2(JMh.x, 0.0f);
     }
 
-    if (diagnosticMode == 5)
-    {
-      return float3(focusJ, Mratio, projectJ);
-    }
     if (diagnosticMode == 12)
     {
       return float3(JMboundary.x, JMboundary.y, JMh.z);
