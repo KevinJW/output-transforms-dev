@@ -513,7 +513,10 @@ local:
     return rgb;
   }
 
-  float hue_angle_dependency_Hellwig2022(float hr) // TODO; where does this origininate from
+  // Hellwig L, Stolitzka D,Fairchild MD.
+  // Extending CIECAM02 and CAM16 for the Helmholtz–Kohlrausch effect.
+  // Color Res Appl. 2022;1-9. doi:10.1002/col.22793 
+  float hue_angle_dependency_Hellwig2022(float hr) 
   {
     return -0.160 * cos(hr) + 0.132 * cos(2 * hr) - 0.405 * sin(hr) + 0.080 * sin(2 * hr) + 0.792;
   }
