@@ -1143,7 +1143,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     // # Step 4
     // # Applying post-adaptation non-linear response compression matrix.
-    const float3 RGB_a = vector_dot(panlrcm, float3(P_p_2, a, b)) / 1403.0f; // TODO shift this to matrix ?
+    const float3 RGB_a = vector_dot(panlrcm, float3(P_p_2, a, b));
 
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
@@ -2001,18 +2001,16 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   {
     float panlrcm_data[]=
     {
-      // original values: 2.0f, 1.0f, 0.05f,
-                            ra, 1.0f, ba,
-      1.0f, -12.0f / 11.0f, 1.0f / 11.0f,
-      1.0f / 9.0f, 1.0f / 9.0f, -2.0f / 9.0f
+      achromatic_weights.x, achromatic_weights.y, achromatic_weights.z,
+      a_weights.x, a_weights.y, a_weights.z, 
+      b_weights.x, b_weights.y, b_weights.z, 
     };
     panlrcm.setArray(panlrcm_data);
     panlrcm = panlrcm.invert();
 
-    // Normalize rows so that first column is 460
     for (int i = 0; i < 3; i++)
     {
-      float n = 460.0f / panlrcm[i][0];
+      float n = (460.0f / panlrcm[i][0]) / 1403.0f;
       panlrcm[i][0] *= n;
       panlrcm[i][1] *= n;
       panlrcm[i][2] *= n;
@@ -2201,11 +2199,10 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     }
     CAT_CAT16_INVERSE = CAT_CAT16.invert();
 
-    generate_panlrcm();
-
     achromatic_weights = float3(ra, 1.0f, ba);
     a_weights   = float3(11.0f, -12.0f, 1.0f) / 11.0f;
     b_weights   = float3(1.0f, 1.0f, -2.0f) / 9.0f;
+    generate_panlrcm();
 
     precompute_hellwig(inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, 0);
     precompute_hellwig(refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, 1);
