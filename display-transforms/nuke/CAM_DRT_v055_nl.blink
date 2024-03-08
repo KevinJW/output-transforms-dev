@@ -558,25 +558,16 @@ local:
             g.x * (Y * (r.y - 1.0f) +  \
             r.y * (X + Z))) / d ;
 
-    // # Assemble the matrix
+    // # Assemble the matrix 
     float Mdata[] =
     {
-      Sr * r.x, Sr * r.y, Sr * (1.0f - r.x - r.y),
-      Sg * g.x, Sg * g.y, Sg * (1.0f - g.x - g.y),
-      Sb * b.x, Sb * b.y, Sb * (1.0f - b.x - b.y),
-    };
-
-    float MdataNukeOrder[] = { // TODO: remove transposition
-      Mdata[0], Mdata[3], Mdata[6],
-      Mdata[1], Mdata[4], Mdata[7],
-      Mdata[2], Mdata[5], Mdata[8],
+      Sr * r.x, Sg * g.x, Sb * b.x,
+      Sr * r.y, Sg * g.y, Sb * b.y,
+      Sr * (1.0f - r.x - r.y), Sg * (1.0f - g.x - g.y), Sb * (1.0f - b.x - b.y),
     };
 
     float3x3 newMatrix;
-    newMatrix.setArray(MdataNukeOrder);
-
-    // create inverse matrix
-    float3x3 newMatrixInverse = newMatrix.invert();
+    newMatrix.setArray(Mdata);
 
     // return forward or inverse matrix
     if (direction == 0)
@@ -585,6 +576,8 @@ local:
     }
     else if (direction == 1)
     {
+      // create inverse matrix
+      float3x3 newMatrixInverse = newMatrix.invert();
       return newMatrixInverse;
     }
   }
