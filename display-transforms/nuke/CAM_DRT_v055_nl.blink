@@ -335,6 +335,8 @@ local:
   float3 D_RGB[3];
   float A_w[3];
   float3 achromatic_weights;
+  float3 a_weights;
+  float3 b_weights;
 
   // Nonlinearity 'constants'
   float nl_gamma;
@@ -1071,21 +1073,18 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c, stage);
 
-    // # Step 4
+    // # Step 6 and Step 4
+    // # Computing achromatic responses for the stimulus.
     // # Converting to preliminary cartesian coordinates.
-    float R_a = RGB_a.x;
-    float G_a = RGB_a.y;
-    float B_a = RGB_a.z;
-    float a   = R_a - 12.0f * G_a / 11.0f + B_a / 11.0f; // TODO: dot products
-    float b   = (R_a + G_a - 2.0f * B_a) / 9.0f;
+    // basically a 3x3 matrix
+
+    const float A = dot(achromatic_weights, RGB_a);
+    const float a = dot(a_weights, RGB_a);
+    const float b = dot(b_weights, RGB_a);
 
     // # Computing the *hue* angle :math:`h`.
     const float hr = atan2(b, a);
     const float h  = wrap_to_360(degrees(hr));
-
-    // # Step 6
-    // # Computing achromatic responses for the stimulus.
-    const float A = dot(achromatic_weights, RGB_a);
 
     // # Step 7
     // # Computing the correlate of *Lightness* :math:`J`.
@@ -2205,6 +2204,9 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     generate_panlrcm();
 
     achromatic_weights = float3(ra, 1.0f, ba);
+    a_weights   = float3(11.0f, -12.0f, 1.0f) / 11.0f;
+    b_weights   = float3(1.0f, 1.0f, -2.0f) / 9.0f;
+
     precompute_hellwig(inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, 0);
     precompute_hellwig(refWhite, outputViewingConditions, L_A, Y_b, discountIlluminant_mid, 1);
     precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, 2);
