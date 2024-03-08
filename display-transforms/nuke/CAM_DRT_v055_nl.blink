@@ -152,8 +152,8 @@ param:
 
   bool   sixAxisCompressionMode; // Unused
   bool   Locuscompressmode; // Unused
+  int   boundryIntersectionMethod; // Unused
 
-  int   boundryIntersectionMethod;
   bool  disableUpperHullGamma;
   bool  disableLowerHullGamma;
   float lowerHullGamma;
@@ -403,46 +403,6 @@ local:
   inline float4 lerp(float4 a, float4 b, float t)
   {
     return a + t * (b - a);
-  }
-
-  // "safe" power function to avoid NANs or INFs when taking a fractional power of a negative base
-  // this one initially returned -pow(abs(b), e) for negative b
-  // but this ended up producing undesirable results in some cases
-  // so now it just returns 0.0 instead
-  inline float spow(float base, float exponent)
-  {
-    // a = np.atleast_1d(a)
-    float a = base;
-    float b = exponent;
-    // // p = as_float_array(p)
-
-    // float a_p = sign(a) * pow(  fabs(a) ,p)  ;
-
-    // // a_p[np.isnan(a_p)] = 0
-
-    // return a_p;
-
-    // np.sign(a) * pow(np.abs(a) , b)
-
-    // float a_p = sign(a) * pow(fabs(a) , b) ;
-    // if ( isnan(a_p) )
-    // {
-    //     a_p = a_p;
-    // }
-    // else
-    // {
-    //     a_p = 0.0;
-    // }
-    // return a_p;
-
-    if (base < 0.0f && exponent != floor(exponent))
-    {
-      return 0.0f;
-    }
-    else
-    {
-      return pow(base, exponent);
-    }
   }
 
   inline float3 float3pow(float3 base, float exponent)
@@ -1755,37 +1715,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     return float2(to.x * (1.0f - t1) + t1 * from.x, t1 * from.y);
   }
 
-  float2 findCurveIntersection(float c, float2 cusp, float m, float h)
-  {
-    // based on this desmos plot https://www.desmos.com/calculator/pcsovzirqa
-    float xc = cusp.y;
-    float yc = cusp.x;
-    float f  = 1.0;
-    float mf = m * f;
-    float xi = 1.0f;
-    float g1 = 1.0f / model_gamma; // TODO: hue dependent?
-    float g2 = hueDependantUpperHullGamma(h);
-
-    if (m * xc + c < yc)
-    {
-      // below cusp
-      xi = spow((1 - mf), (g1 - 1)) * ((yc * spow((c / yc), (1.0 / g1))) / (yc / xc - m));
-    }
-    else
-    {
-      // above cusp
-      xi =
-        spow((1 + mf), ((g2 - 1))) * (xc * (limitJmax - yc) * spow(((limitJmax - c) / (limitJmax - yc)), (1 / g2)) / (m * xc + limitJmax - yc));
-    }
-    float yi = (m * xi) + c;
-    if (yi > limitJmax)
-    {
-      yi = limitJmax;
-      xi = 0.0f;
-    }
-    return float2(yi, xi);
-  }
-
   float3 getReachBoundry(float3 Jmh)
   {
     const float h = Jmh.z;
@@ -1909,29 +1838,13 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     float slope_gain = limitJmax * focusDist * getFocusGain(Jx, JMcusp.x);
 
-    // Find gamut intersection
-    float2 project_to = float2(projectJ, 0.0f);
-    float2 JMboundary = float2(1.0f, 1.0f);
-    if (boundryIntersectionMethod == 0)
-    {
-      // Original method implemented by Pekka
-      JMboundary = find_gamut_intersection(JMcusp, project_from, project_to, smoothCusps);
-    }
-    else if (boundryIntersectionMethod == 1)
-    {
-      // Alternate method shown in Oct 19 meeting
-      float m    = (JMh.x - projectJ) / JMh.y;
-      JMboundary = findCurveIntersection(JMh.x, JMcusp, 0.0f, JMh.z);
-    }
-    else if (boundryIntersectionMethod == 2)
-    {
-      float  gamma_top         = hueDependantUpperHullGamma(JMh.z);
-      float  gamma_bottom      = hueDependantLowerHullGamma(JMh.z);
-      float3 nickBoundryReturn = findGamutBoundaryIntersection(JMh, JMcusp, focusJ, limitJmax, slope_gain, smoothCusps, gamma_top, gamma_bottom);
-      JMboundary               = float2(nickBoundryReturn.x, nickBoundryReturn.y);
-      project_to               = float2(nickBoundryReturn.z, 0.0f);
-      projectJ                 = nickBoundryReturn.z;
-    }
+    // Find gamut intersection 
+    float  gamma_top         = hueDependantUpperHullGamma(JMh.z);
+    float  gamma_bottom      = hueDependantLowerHullGamma(JMh.z);
+    float3 nickBoundryReturn = findGamutBoundaryIntersection(JMh, JMcusp, focusJ, limitJmax, slope_gain, smoothCusps, gamma_top, gamma_bottom);
+    float2 JMboundary        = float2(nickBoundryReturn.x, nickBoundryReturn.y);
+    float2 project_to        = float2(nickBoundryReturn.z, 0.0f);
+    projectJ                 = nickBoundryReturn.z;
 
     // Get hue dependent compression parameters
     float4 interpolatedCompressionFuncParams;
@@ -2219,7 +2132,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     if (ccReach == 0) // Chroma Compression Space (primaries defined in kernel params)
     {
       RGB_to_XYZ_cgReach = RGBPrimsToXYZMatrix(crxy, cgxy, cbxy, cwxy, 1.0f, 0);
-
     }
     else if (ccReach == 1)
     {
@@ -2258,7 +2170,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     if (fitWhite)
     {
       // Scale to fit maximum creative white channel value
-      float3 creativeWhiteXYZ = vector_dot(RGB_to_XYZ_limit, float3(1.0f, 1.0f, 1.0f)); // TODO: these scaling parameters could be precalculated
+      float3 creativeWhiteXYZ = vector_dot(RGB_to_XYZ_limit, float3(1.0f, 1.0f, 1.0f));
       float3 creativeWhiteRGB = vector_dot(XYZ_to_RGB_output, creativeWhiteXYZ);
       fitWhiteScale = 1.0f / max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
     }
@@ -2809,7 +2721,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 204)
     {
       // inverse tonescale in JMh
-      diagnostic = inverseTonescale(srcRGB, 0); // TODO: check stage
+      diagnostic = inverseTonescale(srcRGB, 0);
     }
     else if (diagnosticMode == 205)
     {
