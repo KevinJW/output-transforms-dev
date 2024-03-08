@@ -513,13 +513,7 @@ local:
     return rgb;
   }
 
-  // basic 3D hypotenuse function, does not deal with under/overflow
-  inline float hypot_float3(float3 xyz)
-  {
-    return length(xyz);
-  }
-
-  float hue_angle_dependency_Hellwig2022(float hr)
+  float hue_angle_dependency_Hellwig2022(float hr) // TODO; where does this origininate from
   {
     return -0.160 * cos(hr) + 0.132 * cos(2 * hr) - 0.405 * sin(hr) + 0.080 * sin(2 * hr) + 0.792;
   }
@@ -569,7 +563,7 @@ local:
       Sb * b.x, Sb * b.y, Sb * (1.0f - b.x - b.y),
     };
 
-    float MdataNukeOrder[] = {
+    float MdataNukeOrder[] = { // TODO: remove transposition
       Mdata[0], Mdata[3], Mdata[6],
       Mdata[1], Mdata[4], Mdata[7],
       Mdata[2], Mdata[5], Mdata[8],
@@ -613,7 +607,7 @@ local:
   // encode linear values as sRGB gamma
   float linear_to_sRGB(float v)
   {
-    return v <= 0.0031308f ? 12.92f * v : 1.055 * (pow(v, 1.0f / 2.4f)) - 0.055f;
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * (pow(v, 1.0f / 2.4f)) - 0.055f;
   }
 
   float3 post_adaptation_non_linear_response_compression_forward_original(float3 RGB, int stage)
@@ -1117,7 +1111,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
       // # Computing the correlate of *chroma* :math:`C`.
       const float C = 35.0f * M / A_w[stage];
       // # *Helmholtz–Kohlrausch* Effect Extension.
-      J = J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
+      J = J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
       // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w[stage];
     }
     
@@ -1133,7 +1127,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
-    const float C = (M * 35) / A_w[stage];
+    const float C = (M * 35.0f) / A_w[stage];
     if (HK_mode)
     {
       J = J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
@@ -1414,7 +1408,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     // CAM16 vs Hellwig2022: https://onlinelibrary.wiley.com/cms/asset/60788dfc-6bae-4949-bf8d-bd8c3467aef8/col22792-fig-0005-m.jpg
     else if (cc_et == 1)
     {
-      const float _h   = hr;
+      const float _h   = hr; // TODO: investigate spline implementation from Luke's PhD (A.15)
       const float _2_h = 2 * hr;
       const float _3_h = 3 * hr;
       const float _4_h = 4 * hr;
@@ -1828,7 +1822,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       float boundaryNick = limitJmax * pow(intersectJ / limitJmax, model_gamma) * reachMaxM / (limitJmax - slope * reachMaxM);
       return float3(Jmh.x, boundaryNick, Jmh.z);
     }
-    float cuspTarget = reachMaxM * pow((Jmh.x / limitJmax), model_gamma);
+    float cuspTarget = reachMaxM * pow((Jmh.x / limitJmax), model_gamma); // TODO: model_gamma used here ???
     return float3(Jmh.x, cuspTarget, Jmh.z);
   }
 
@@ -1838,7 +1832,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       // use primary based reach
       float locusMax   = getReachBoundry(Jmh).y;
-      float difference = max(1.0001f, locusMax / Jmh.y);
+      float difference = max(1.0001f, locusMax / Jmh.y); // TODO: magic threshold?
       float threshold  = max(compressionFuncParams.x, 1.0f / difference);
       return float4(threshold, difference, difference, compressionFuncParams.w);
     }
@@ -1854,7 +1848,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     float thr = lerp(cuspJ, limitJmax, focusGainBlend);
     if (J > thr)
     {
-      // Approximate inverse required above threshold
+      // Approximate inverse required above threshold // TODO
       float gain = (limitJmax - thr) / max(0.0001f, (limitJmax - min(limitJmax, J)));
       return pow(log10(gain), 1.0f / focusAdjustGain) + 1.0f;
     }
@@ -1904,7 +1898,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     // https://www.desmos.com/calculator/9u0wiiz9ys
     float Mratio = project_from.y / (focusDist * JMcusp.y);
-    float a      = max(0.001f, Mratio / focusJ);
+    float a      = max(0.001f, Mratio / focusJ); // TODO: threshold
     float b0     = 1.0f - Mratio;
     float b1     = -(1.0f + Mratio + (a * limitJmax));
     float b      = project_from.x < focusJ ? b0 : b1;
@@ -1962,7 +1956,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Compress the out of gamut color along the projection line
     float2 JMcompressed = project_from;
 
-    float lowerMlimit = 0.0001f; // Testing a small value here
+    float lowerMlimit = 0.0001f; // Testing a small value here // TODO
     if (JMh.x < limitJmax
         && JMh.y > lowerMlimit)  // using a small value to test against here rather than 0.0, and I was getting Nans on inversion.
     {
@@ -2088,13 +2082,13 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     daniele_u_2    = pow((daniele_r_hit / daniele_m_1) / ((daniele_r_hit / daniele_m_1) + daniele_w_2), daniele_g);
     daniele_m_2    = daniele_m_1 / daniele_u_2;
 
-    // 1.0f / (c * z)
+    // 1.0f / (c * z) // TODO: investigate uses
     model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
 
     // Chroma compression scaling for HDR/SDR appearance match
     float log_peak = log10(daniele_n / daniele_n_r);
     compr          = chroma_compress + (chroma_compress * chroma_compress_fact) * log_peak;
-    sat            = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak);
+    sat            = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak); // TODO; magic number
     sat_thr        = chroma_expand_thr / daniele_n;
 
     // Gamut mapper focus distance scaling with peak luminance for
@@ -2113,6 +2107,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       0.401288, 0.650173, -0.051461, -0.250268, 1.204414, 0.045854, -0.002079, 0.048952, 0.953127,
     };
 
+    // TODO; origin of numbers
     float Modified_CAT16_data[] = {
       0.656619, 0.342071, 0.00131062, -0.222571, 1.10658, 0.115987, -0.000634146, 0.05855, 0.942084,
     };
@@ -2250,7 +2245,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     // With gamut mapper reach mode 7, use the chroma compression reach space with the
     // gamut mapper.
-    if (primariesReach == 7)
+    if (primariesReach == 7) // TODO: always use same tables
       XYZ_to_RGB_reach = XYZ_to_RGB_cgReach;
 
     // Cusp table for limiting gamut
