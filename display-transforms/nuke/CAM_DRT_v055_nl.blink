@@ -457,16 +457,6 @@ local:
     return float3(pow(base.x, exponent), pow(base.y, exponent), pow(base.z, exponent));
   }
 
-  // "safe" div
-  float sdiv(float a, float b)
-  {
-    if (b == 0.0f)
-    {
-      return 0.0f;
-    }
-    return a / b;
-  }
-
   float degree_of_adaptation(float F, float _L_A)
   {
     float D = F * (1 - (1 / 3.6) * exp((-_L_A - 42) / 92));
@@ -1129,7 +1119,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     float M = 43.0f * surround.z * sqrt(a * a + b * b);
 
     // # Computing the correlate of *saturation* :math:`s`.
-    // float s = 100.0f * sdiv(M, Q);
+    // float s = 100.0f * div(M, Q); // possible div by 0
   
     if (HK_mode)
     {
