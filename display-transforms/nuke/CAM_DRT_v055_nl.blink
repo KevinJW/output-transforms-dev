@@ -1023,7 +1023,8 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     // # Step 9
     // # Computing the correlate of *colourfulness* :math:`M`.
-    float M = 43.0f * surround.z * sqrt(a * a + b * b);
+    const float et = eccentricity_factor(hr);
+    float M = 43.0f * surround.z * et * sqrt(a * a + b * b);
 
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * div(M, Q); // possible div by 0
@@ -1033,7 +1034,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
       // # Computing the correlate of *chroma* :math:`C`.
       const float C = 35.0f * M / A_w[stage];
       // # *Helmholtz–Kohlrausch* Effect Extension.
-      J = J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
+      J = sqrt(J * J + 66.0f * C); //J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
       // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w[stage];
     }
     
@@ -1049,17 +1050,18 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
-    const float C = (M * 35.0f) / A_w[stage];
     if (HK_mode)
     {
-      J = J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
+      const float C = (M * 35.0f) / A_w[stage];
+      J = sqrt(J * J - 66.0f * C); //J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
     const float A = A_w[stage] * pow(J / 100.0f, 1.0f / (surround.y * z[stage]));
 
     // # Computing *P_p_1* to *P_p_2*.
-    const float P_p_1 = 43.0f * surround.z;
+    const float et = eccentricity_factor(hr);
+    const float P_p_1 = 43.0f * et * surround.z;
     const float P_p_2 = A;
 
     // # Step 3
@@ -1266,10 +1268,8 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   }
 
   // Return compression gamut cusp M scaled with an eccentricity factor
-  float eccentricity_factor(float h)
+  inline float eccentricity_factor(float hr)
   {
-    const float hr = radians(h);
-
     float e_t = 1.0f;
 
     // CAM16
@@ -1317,7 +1317,9 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   float cusp_with_eccentricity_factor(float h)
   {
     const float2 JMcusp = ccuspFromTable(h);
-    return JMcusp.y * eccentricity_factor(h); // TODO: bake into init
+    const float hr = radians(h);
+
+    return JMcusp.y * eccentricity_factor(hr); // TODO: bake into init
   }
 
   // A "toe" function that remaps the given value x between 0 and limit.
@@ -1962,6 +1964,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
     // limitJmax (assumed to match limitRGB white)
+    // Note this fails for HK mode as HK will be increased for highly saturated colours above white
     limitJmax = RGB_to_JMh(float3(1.0f), RGB_to_XYZ_limit).x;
 
     // Cusp table for chroma compression gamut
