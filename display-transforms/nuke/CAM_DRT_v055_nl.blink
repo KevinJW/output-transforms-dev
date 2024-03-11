@@ -141,18 +141,6 @@ param:
   // Gamut Compression Fuction Parameters
   // Threshold / min Limit / max Limit / Power
   float4 compressionFuncParams;
-  float4 compressionFuncParamsR; // Unused
-  float4 compressionFuncParamsY; // Unused
-  float4 compressionFuncParamsG; // Unused
-  float4 compressionFuncParamsC; // Unused
-  float4 compressionFuncParamsB; // Unused
-  float4 compressionFuncParamsM; // Unused
-  bool   Reachcompressmode; // Unused
-
-  bool reachNick; // Unused
-  bool sixAxisCompressionMode; // Unused
-  bool Locuscompressmode; // Unused
-  int  boundryIntersectionMethod; // Unused
 
   bool  disableUpperHullGamma;
   bool  disableLowerHullGamma;
