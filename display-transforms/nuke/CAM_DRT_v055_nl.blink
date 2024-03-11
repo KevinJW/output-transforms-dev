@@ -322,7 +322,6 @@ local:
   // both tables need to be declared here since temporary array variables
   // in the init() fuction seem to crash Nuke on some systems
   float3 gamutCuspTable[360];
-  float3 gamutCuspTableAP1[360];
   float3 gamutCuspTableReach[360];
   float3 cgamutCuspTable[360];
   float3 cgamutReachTable[360];
@@ -1197,54 +1196,6 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     return float2(cuspJ, cuspM);
   }
 
-  float2 cuspFromTableAP1(float h)
-  {
-
-    float3 lo;
-    float3 hi;
-
-    if (h <= gamutCuspTableAP1[0].z)
-    {
-      lo   = gamutCuspTableAP1[gamutCuspTableSize - 1];
-      lo.z = lo.z - 360.0f;
-      hi   = gamutCuspTableAP1[0];
-    }
-    else if (h >= gamutCuspTableAP1[gamutCuspTableSize - 1].z)
-    {
-      lo   = gamutCuspTableAP1[gamutCuspTableSize - 1];
-      hi   = gamutCuspTableAP1[0];
-      hi.z = hi.z + 360.f;
-    }
-    else
-    {
-      int low_i  = 0;
-      int high_i = gamutCuspTableSize - 1;
-      int i      = hue_position_in_uniform_table(h, gamutCuspTableSize);
-
-      while (low_i + 1 < high_i)
-      {
-        if (h > gamutCuspTableAP1[i].z)
-        {
-          low_i = i;
-        }
-        else
-        {
-          high_i = i;
-        }
-        i = midpoint(low_i, high_i);
-      }
-      lo = gamutCuspTableAP1[high_i - 1];
-      hi = gamutCuspTableAP1[high_i];
-    }
-
-    float t = (h - lo.z) / (hi.z - lo.z);
-
-    float cuspJ = lerp(lo.x, hi.x, t);
-    float cuspM = lerp(lo.y, hi.y, t);
-
-    return float2(cuspJ, cuspM);
-  }
-
   float2 ccuspFromTable(float h)
   {
     float3 lo;
@@ -1397,7 +1348,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   float cusp_with_eccentricity_factor(float h)
   {
     const float2 JMcusp = ccuspFromTable(h);
-    return JMcusp.y * eccentricity_factor(h);
+    return JMcusp.y * eccentricity_factor(h); // TODO: bake into init
   }
 
   // A "toe" function that remaps the given value x between 0 and limit.
@@ -1432,8 +1383,8 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     float nJ    = JMh.x / limitJmax;
     float snJ   = max(0.0f, 1.0f - nJ);
-    float Mnorm = cusp_with_eccentricity_factor(JMh.z);
-    float limit = pow(nJ, model_gamma) * cReachFromTable(JMh.z) / Mnorm;
+    float Mnorm = cusp_with_eccentricity_factor(JMh.z); // TODO: why do we use the eccentricity here and nowhere else?
+    float limit = pow(nJ, model_gamma) * cReachFromTable(JMh.z) / Mnorm; // e.g. cReachFromTable call here
 
     if (!invert)
     {
@@ -2075,8 +2026,6 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     initialise_upper_hull_gamma();
     initialise_lower_hull_gamma();
 
-    initialise_cusp_table(gamutCuspTableAP1, gamutCuspTableSize, AP1_to_XYZ);
-
     fitWhiteScale = 1.0f;
     if (fitWhite)
     {
@@ -2484,16 +2433,10 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       // output gamut boundary
       diagnostic = compressGamut(srcRGB, invert);
     }
-    else if (diagnosticMode == 14)
+    else if ((diagnosticMode == 14) || (diagnosticMode == 15))
     {
       // output gamut cusp
       const float2 JMcusp = cuspFromTable(srcRGB.z);
-      diagnostic          = float3(JMcusp.x, JMcusp.y, srcRGB.z);
-    }
-    else if (diagnosticMode == 15)
-    {
-      // output AP1 cusp
-      const float2 JMcusp = cuspFromTableAP1(srcRGB.z);
       diagnostic          = float3(JMcusp.x, JMcusp.y, srcRGB.z);
     }
     else if (diagnosticMode == 18)
