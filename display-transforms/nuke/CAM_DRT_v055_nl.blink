@@ -1640,7 +1640,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     float2 JMcusp     = cuspFromTable(Jmh.z);
     float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-    float  slope_gain = limitJmax * focusDist * getFocusGain(Jmh.x, JMcusp.x);
+    float  slope_gain = compute_slope_gain(Jmh.x, JMcusp.x);
     float  intersectJ = solve_J_intersect(float2(Jmh.x, Jmh.y), focusJ, limitJmax, slope_gain);
     float  slope;
     if (intersectJ < focusJ)
@@ -1670,9 +1670,14 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     }
     else
     {
-      // Analytic inverse possible below cusp
+      // Analytic inverse possible below cusp // TODO is this comment correct
       return 1.0f;
     }
+  }
+
+  inline float compute_slope_gain(float J, float cuspJ)
+  {
+    return limitJmax * focusDist * getFocusGain(J, cuspJ);
   }
 
   float3 compressGamut(float3 JMh, int invert)
@@ -1711,7 +1716,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Calculate where the out of gamut color is projected to
     float2 JMcusp     = cuspFromTable(JMh.z);
     float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-    float  slope_gain = limitJmax * focusDist * getFocusGain(Jx, JMcusp.x);
+    float  slope_gain = compute_slope_gain(Jx, JMcusp.x);
   
     // Find gamut intersection 
     const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
@@ -2194,7 +2199,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float focusJ = lerp(JMcusp.x, midJ, min(1.0, cuspMidBlend - (JMcusp.x / limitJmax)));
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = limitJmax * focusDist * getFocusGain(testJmh[testIndex].x, JMcusp.x);
+      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
 
       const float3 approxLimit =
@@ -2287,7 +2292,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float focusJ = lerp(JMcusp.x, midJ, cuspMidBlend);
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float slope_gain = limitJmax * focusDist * getFocusGain(testJmh[testIndex].x, JMcusp.x);
+      const float slope_gain = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
 
       const float3 approxLimit     = findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax,
@@ -2463,14 +2468,13 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       float2 JMcusp = cuspFromTable(srcRGB.z);
       // create test value halfway between the cusp and the Jmax
-      float slope_gain = limitJmax * focusDist;
       diagnostic       = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
     }
     else if ((diagnosticMode == 23) || (diagnosticMode == 24))
     {
       float2 JMcusp = cuspFromTable(srcRGB.z);
       // create test value halfway between the cusp and the Jmax
-      float  slope_gain  = limitJmax * focusDist;
+      float  slope_gain  = limitJmax * focusDist; // TODO: is this diagnostic correct no focus gain in calculation
       float3 testJmh     = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
 
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
@@ -2486,7 +2490,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       float2 JMcusp            = cuspFromTable(srcRGB.z);
       float  focusJ            = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-      float  slope_gain        = limitJmax * focusDist * getFocusGain(JMh.x, JMcusp.x);
+      float  slope_gain        = compute_slope_gain(JMh.x, JMcusp.x);
 
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
       float3 nickBoundryReturn = findGamutBoundaryIntersection(srcRGB, JMcusp, focusJ, limitJmax, slope_gain, smoothCusps,
