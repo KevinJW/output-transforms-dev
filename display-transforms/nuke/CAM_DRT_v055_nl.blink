@@ -2466,39 +2466,29 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       float slope_gain = limitJmax * focusDist;
       diagnostic       = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
     }
-    else if (diagnosticMode == 23)
+    else if ((diagnosticMode == 23) || (diagnosticMode == 24))
     {
       float2 JMcusp = cuspFromTable(srcRGB.z);
       // create test value halfway between the cusp and the Jmax
       float  slope_gain  = limitJmax * focusDist;
       float3 testJmh     = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
-      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
 
+      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
       float3 approxLimit = findGamutBoundaryIntersection(testJmh, JMcusp, (JMcusp.x + 38.0f) / 2, limitJmax, slope_gain, smoothCusps,
                                                          estimated_hull_gammas);
       diagnostic         = float3(approxLimit.x, approxLimit.y, srcRGB.z);
+      if (diagnosticMode == 24)
+      {
+        diagnostic = JMh_to_RGB(float3(approxLimit.x, approxLimit.y, srcRGB.z), XYZ_to_RGB_limit);
+      }
     }
-
-    else if (diagnosticMode == 24)
-    {
-      float2 JMcusp = cuspFromTable(srcRGB.z);
-      // create test value halfway between the cusp and the Jmax
-      float  slope_gain  = limitJmax * focusDist;
-      float3 testJmh     = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
-      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      float3 approxLimit = findGamutBoundaryIntersection(testJmh, JMcusp, (JMcusp.x + 38.0f) / 2, limitJmax, slope_gain, smoothCusps,
-                                                         estimated_hull_gammas);
-      float3 newLimitRGB = JMh_to_RGB(float3(approxLimit.x, approxLimit.y, srcRGB.z), XYZ_to_RGB_limit);
-      diagnostic         = newLimitRGB;
-    }
-
     else if (diagnosticMode == 25)
     {
       float2 JMcusp            = cuspFromTable(srcRGB.z);
       float  focusJ            = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
       float  slope_gain        = limitJmax * focusDist * getFocusGain(JMh.x, JMcusp.x);
-      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
 
+      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
       float3 nickBoundryReturn = findGamutBoundaryIntersection(srcRGB, JMcusp, focusJ, limitJmax, slope_gain, smoothCusps,
                                                                estimated_hull_gammas);
       diagnostic               = float3(srcRGB.x, nickBoundryReturn.y, srcRGB.z);
@@ -2513,8 +2503,8 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     {
       // output
       float2 JMcusp = cuspFromTable(srcRGB.z);
-      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
 
+      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
       diagnostic    = findGamutBoundaryIntersection(srcRGB, JMcusp, lerp(JMcusp.x, midJ, cuspMidBlend), limitJmax, 10000.0f, 0.0f,
                                                     estimated_hull_gammas);
     }
