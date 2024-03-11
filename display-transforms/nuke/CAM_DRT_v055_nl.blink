@@ -2246,7 +2246,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float  slope_gain  = limitJmax * focusDist * getFocusGain(testJmh[testIndex].x, JMcusp.x);
-      const float2 estimated_hull_gammas = float2(topGamma, lowerHullGamma);
+      const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
 
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, smoothCusps, estimated_hull_gammas);
@@ -2339,7 +2339,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float slope_gain = limitJmax * focusDist * getFocusGain(testJmh[testIndex].x, JMcusp.x);
-      const float2 estimated_hull_gammas = float2(upperHullGamma, bottomGamma);
+      const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
 
       const float3 approxLimit     = findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax,
                                                                    slope_gain, smoothCusps, estimated_hull_gammas);
