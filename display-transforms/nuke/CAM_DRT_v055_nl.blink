@@ -454,21 +454,20 @@ local:
 
   float3 compress_aces(float3 rgb, float3 c, float3 m, float3 y, int invert)
   {
-    float  ach = max(rgb.x, max(rgb.y, rgb.z));
-    float3 d   = 0.0f;
+    const float  ach = max(rgb.x, max(rgb.y, rgb.z));
+    const float fach = fabs(ach);
 
+    float3 d = 0.0f;
     if (ach)
     {
-      d.x = (ach - rgb.x) / fabs(ach);
-      d.y = (ach - rgb.y) / fabs(ach);
-      d.z = (ach - rgb.z) / fabs(ach);
+      d = (ach - rgb) / fach;
     }
 
     rgb.x = compressPowerP(d.x, c.x, c.y, c.z, invert);
     rgb.y = compressPowerP(d.y, m.x, m.y, m.z, invert);
     rgb.z = compressPowerP(d.z, y.x, y.y, y.z, invert);
 
-    rgb = ach - rgb * fabs(ach);
+    rgb = ach - rgb * fach;
 
     return rgb;
   }
@@ -724,10 +723,9 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
   float solve_J_intersect(float2 JM, float focusJ, float maxJ, float slope_gain)
   {
-    float a          = JM.y / (focusJ * slope_gain);
-    float b          = 0.0f;
-    float c          = 0.0f;
-    float intersectJ = 0.0f;
+    float a = JM.y / (focusJ * slope_gain);
+    float b;
+    float c;
 
     if (JM.x < focusJ)
     {
@@ -740,18 +738,16 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
       c = maxJ * JM.y / slope_gain + JM.x;
     }
 
-    float root = sqrt(b * b - 4.0f * a * c);
+    const float root = sqrt(b * b - 4.0f * a * c);
 
     if (JM.x < focusJ)
     {
-      intersectJ = 2.0f * c / (-b - root);
+      return 2.0f * c / (-b - root);
     }
     else
     {
-      intersectJ = 2.0f * c / (-b + root);
+      return 2.0f * c / (-b + root);
     }
-
-    return intersectJ;
   }
 
   float3 viewingConditionsToSurround(int viewingConditions)
@@ -912,14 +908,6 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     return JMh;
   }
 
-  // convert RGB values in the output colorspace to the CAM J (lightness), M (colorfulness) and h (hue) correlates
-  float3 luminance_RGB_to_JMh(float3 luminanceRGB)
-  {
-    float3 XYZ = vector_dot(RGB_to_XYZ_output, luminanceRGB);
-    float3 JMh = XYZ_to_JMh(XYZ, outputViewingConditions, HK_mode_mid, 1);
-    return JMh;
-  }
-
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
   float3 JMh_to_output_RGB(float3 JMh)
   {
@@ -932,7 +920,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     }
 
     // First matrix to limiting gamut for clamping
-    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ);
+    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ); // TODO compine into one
     luminanceRGB *= fitWhiteScale;
 
     if (softclampOutput)
@@ -961,15 +949,6 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     float3 outputRGB = luminanceToEncoding3(encodingOut, luminanceRGB);
 
     return outputRGB;
-  }
-
-  // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
-  float3 JMh_to_luminance_RGB(float3 JMh)
-  {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, outputViewingConditions, HK_mode_mid, 1);
-    float3 luminanceRGB = vector_dot(XYZ_to_RGB_output, luminanceXYZ);
-
-    return luminanceRGB;
   }
 
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
@@ -1548,8 +1527,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     float luminance = Hellwig_J_to_Y(tonemappedJMh.x, surround, stage);
 
-    // Dummy value to init the var
-    float linear = 0.0f;
+    float linear;
     if (toneScaleMode == 1)
     {
       linear = daniele_evo_rev(luminance / mmScaleFactor);
@@ -1594,9 +1572,9 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float gamma_top    = estimated_hull_gammas.x;
     const float gamma_bottom = estimated_hull_gammas.y;
 
-    float slope = 0.0f;
+    float slope;
 
-    float s = max(0.000001f, smoothness);
+    float s = max(0.000001f, smoothness); // TODO: factor into precomputed values
     JM_cusp.x *= 1.0f + smoothJ * s; // J
     JM_cusp.y *= 1.0f + smoothM * s; // M
 
@@ -1735,7 +1713,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // Compress the out of gamut color along the projection line
     float2 JMcompressed = project_from;
 
-    float lowerMlimit = 0.0001f; // Testing a small value here // TODO
+    const float lowerMlimit = 0.0001f; // Testing a small value here // TODO
     if (JMh.x < limitJmax
         && JMh.y > lowerMlimit)  // using a small value to test against here rather than 0.0, and I was getting Nans on inversion.
     {
