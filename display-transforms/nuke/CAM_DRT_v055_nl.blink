@@ -912,7 +912,7 @@ local:
     }
 
     // First matrix to limiting gamut for clamping
-    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ); // TODO combine into one
+    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ); // TODO combine into one, be careful with gamma finding
     luminanceRGB *= fitWhiteScale;
 
     if (softclampOutput)
@@ -1324,7 +1324,7 @@ local:
     const float2 JMcusp = ccuspFromTable(h);
     const float  hr     = radians(h);
 
-    return JMcusp.y * eccentricity_factor(hr); // TODO: bake into init
+    return JMcusp.y * eccentricity_factor(hr); // TODO: bake into init? or not at all
   }
 
   // A "toe" function that remaps the given value x between 0 and limit.
@@ -1571,7 +1571,7 @@ local:
 
     float slope;
 
-    JM_cusp *= smooth_cusp_scale;
+    JM_cusp *= smooth_cusp_scale; // TODO; could this be baked in?
 
     float J_intersect_source = solve_J_intersect(JM_source, J_focus, J_max, slope_gain);
     float J_intersect_cusp   = solve_J_intersect(JM_cusp, J_focus, J_max, slope_gain);
@@ -1683,7 +1683,7 @@ local:
 
     if (!applyGamutCompression)
       return JMh;
-    if (project_from.y == 0.0f)
+    if (project_from.y == 0.0f) // TODO: should this be lowerMlimit
       return JMh;
 
     // Calculate where the out of gamut color is projected to
@@ -1717,7 +1717,7 @@ local:
     }
     else
     {
-      JMcompressed = float2(JMh.x, 0.0f);
+      JMcompressed = float2(JMh.x, 0.0f); // TODO: should this be lowerMlimit
     }
 
     if (diagnosticMode == 12) // TODO: do these diagnostics modes hint at functions we should make
@@ -1888,9 +1888,9 @@ local:
     // TODO: could we share these primaries with matrix generation code?
     if (primariesLimit == 0)
     {
-      limitRedForMatrix   = float2(0.7347f, 0.2653);
+      limitRedForMatrix   = float2(0.7347f, 0.2653f);
       limitGreenForMatrix = float2(0.0f, 1.0f);
-      limitBlueForMatrix  = float2(0.0001, -0.077);
+      limitBlueForMatrix  = float2(0.0001f, -0.077f);
     }
     else if (primariesLimit == 1)
     {
@@ -2170,12 +2170,12 @@ local:
 
   bool evaluate_upper_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float topGamma)
   {
-    const float focusJ = lerp(JMcusp.x, midJ, min(1.0, cuspMidBlend - (JMcusp.x / limitJmax)));
+    const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
+    const float  focusJ                = lerp(JMcusp.x, midJ, min(1.0, cuspMidBlend - (JMcusp.x / limitJmax)));
+
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain            = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
-      const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
-
+      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
@@ -2263,12 +2263,12 @@ local:
 
   bool evaluate_lower_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float bottomGamma)
   {
-    const float focusJ = lerp(JMcusp.x, midJ, cuspMidBlend);
+    const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
+    const float focusJ                 = lerp(JMcusp.x, midJ, cuspMidBlend);
+
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain            = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
-      const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
-
+      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
@@ -2297,7 +2297,7 @@ local:
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
 
-      gamutGammas[i].y    = -1.0f;
+      gamutGammas[i].y    = -5.0f;
       const float2 JMcusp = cuspFromTable(hue);
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
@@ -2341,7 +2341,7 @@ local:
   void process()
   {
     SampleType(src) source = src();
-    float3 srcRGB(source.x, source.y, source.z);
+    const float3 srcRGB(source.x, source.y, source.z);
     float3 dstRGB;
     float3 compressedJMh;
     float3 tonemappedJMh;
@@ -2386,9 +2386,9 @@ local:
     else if (diagnosticMode == 4 || diagnosticMode == 7)
     {
       if (diagnosticMode == 4)
-        srcRGB = JMh;
-      dstRGB     = JMh_to_output_RGB(srcRGB);
-      diagnostic = dstRGB;
+        diagnostic = JMh_to_output_RGB(JMh);
+      else
+        diagnostic = JMh_to_output_RGB(srcRGB);
     }
     else if (diagnosticMode == 8)
     {
@@ -2435,8 +2435,8 @@ local:
     }
     else if ((diagnosticMode == 21) || (diagnosticMode == 27))
     {
-      const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      diagnostic                         = float3(estimated_hull_gammas.x, estimated_hull_gammas.y, 0.0f);
+      const float2 estimated_hull_gammas = hueDependantHullGammas(srcRGB.z);
+      diagnostic                         = float3(estimated_hull_gammas.x, estimated_hull_gammas.y, srcRGB.z);
     }
     else if (diagnosticMode == 22)
     {
