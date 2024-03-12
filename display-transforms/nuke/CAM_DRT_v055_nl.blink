@@ -1699,11 +1699,10 @@ local:
     float  projectJ      = ganutBoundary.z;
 
     // Get hue dependent compression parameters
-    const float3 JMh_boundary                      = float3(JMboundary.x, JMboundary.y, JMh.z);
-    float        locusMax                          = getReachBoundry(JMh_boundary).y;
-    float        difference                        = max(1.0001f, locusMax / JMh_boundary.y); // TODO: magic threshold?
-    float        threshold                         = max(compressionFuncParams.x, 1.0f / difference);
-    float4       interpolatedCompressionFuncParams = float4(threshold, difference, difference, compressionFuncParams.w);
+    const float3 JMh_boundary = float3(JMboundary.x, JMboundary.y, JMh.z);
+    const float  locusMax     = getReachBoundary(JMh_boundary).y;
+    const float  difference   = max(1.0001f, locusMax / JMh_boundary.y); // TODO: magic threshold?
+    const float  threshold    = max(compressionFuncParams.x, 1.0f / difference);
 
     // Compress the out of gamut color along the projection line
     float2 JMcompressed;
@@ -1713,9 +1712,7 @@ local:
         && JMh.y > lowerMlimit)        // using a small value to test against here rather than 0.0, and I was getting Nans on inversion.
     {
       float v      = project_from.y / JMboundary.y;
-      v            = compressPowerP(v, interpolatedCompressionFuncParams.x,
-                                    lerp(interpolatedCompressionFuncParams.z, interpolatedCompressionFuncParams.y, projectJ / limitJmax),
-                                    interpolatedCompressionFuncParams.w, invert);
+      v            = compressPowerP(v, threshold, difference, compressionFuncParams.w, invert);
       JMcompressed = project_to + v * (JMboundary - project_to);
     }
     else
