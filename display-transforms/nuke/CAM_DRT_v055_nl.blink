@@ -1556,7 +1556,7 @@ local:
     const int i_hi = next_position_in_table(i_lo, gamutCuspTableSize);
 
     const float base_hue = base_hue_for_position(i_lo, gamutCuspTableSize);
-    const float t        = h - base_hue;
+    const float t        = wrap_to_360(h) - base_hue;
 
     return lerp(gamutGammas[i_lo], gamutGammas[i_hi], t);
   }
