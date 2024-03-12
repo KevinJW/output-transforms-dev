@@ -230,13 +230,13 @@ param:
   float L_A_out;
   float Y_b_out;
 
-  int nonlinearity_mode;
+  int   nonlinearity_mode;
   float ql;
   float qu;
   float qz;
 
 local:
-  
+
   float3x3 CAT_CAT16;
   float3x3 CAT_CAT16_INVERSE;
   float3x3 panlrcm;
@@ -305,8 +305,8 @@ local:
   float midJ;
 
   // Hellwig model's gamma (1 / cz)
-  float model_gamma;
-  float clamped_smoothness;
+  float  model_gamma;
+  float  clamped_smoothness;
   float2 smooth_cusp_scale;
 
   // both tables need to be declared here since temporary array variables
@@ -318,10 +318,10 @@ local:
   float2 gamutGammas[360];
 
   // Hellwig 2022 constants
-  float F_L[3];
-  float z[3];
+  float  F_L[3];
+  float  z[3];
   float3 D_RGB[3];
-  float A_w[3];
+  float  A_w[3];
   float3 achromatic_weights;
   float3 a_weights;
   float3 b_weights;
@@ -444,7 +444,7 @@ local:
 
   float3 compress_aces(float3 rgb, float3 c, float3 m, float3 y, int invert)
   {
-    const float  ach = max(rgb.x, max(rgb.y, rgb.z));
+    const float ach  = max(rgb.x, max(rgb.y, rgb.z));
     const float fach = fabs(ach);
 
     float3 d = 0.0f;
@@ -464,8 +464,8 @@ local:
 
   // Hellwig L, Stolitzka D,Fairchild MD.
   // Extending CIECAM02 and CAM16 for the Helmholtz–Kohlrausch effect.
-  // Color Res Appl. 2022;1-9. doi:10.1002/col.22793 
-  float hue_angle_dependency_Hellwig2022(float hr) 
+  // Color Res Appl. 2022;1-9. doi:10.1002/col.22793
+  float hue_angle_dependency_Hellwig2022(float hr)
   {
     return -0.160 * cos(hr) + 0.132 * cos(2 * hr) - 0.405 * sin(hr) + 0.080 * sin(2 * hr) + 0.792;
   }
@@ -489,6 +489,7 @@ local:
     // # Scale factors for matrix rows
     float d = r.x * (b.y - g.y) + b.x * (g.y - r.y) + g.x * (r.y - b.y);
 
+    // clang-format off
     float Sr =    (X * (b.y - g.y) -      \
             g.x * (Y * (b.y - 1.0f) +  \
             b.y * (X + Z)) +       \
@@ -507,13 +508,14 @@ local:
             g.x * (Y * (r.y - 1.0f) +  \
             r.y * (X + Z))) / d ;
 
-    // # Assemble the matrix 
+    // # Assemble the matrix
     float Mdata[] =
     {
       Sr * r.x, Sg * g.x, Sb * b.x,
       Sr * r.y, Sg * g.y, Sb * b.y,
       Sr * (1.0f - r.x - r.y), Sg * (1.0f - g.x - g.y), Sb * (1.0f - b.x - b.y),
     };
+    // clang-format on
 
     float3x3 newMatrix;
     newMatrix.setArray(Mdata);
@@ -570,7 +572,7 @@ local:
     return sign(corresponding) * temp / (temp1 * temp1);
   }
 
-float post_adaptation_non_linear_response_compression_forward_original_f(float corresponding, int stage)
+  float post_adaptation_non_linear_response_compression_forward_original_f(float corresponding, int stage)
   {
     const float q      = fabs(corresponding);
     const float sign_c = sign(corresponding);
@@ -580,15 +582,15 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
   float post_adaptation_non_linear_response_compression_forward_wheatley_f(float corresponding, int stage)
   {
-    const float q = fabs(corresponding);
+    const float q      = fabs(corresponding);
     const float sign_c = sign(corresponding);
     if (q > qu)
     {
-        return sign_c * (nl_fqu[stage] + nl_upper_slope[stage] * (q - qu));
+      return sign_c * (nl_fqu[stage] + nl_upper_slope[stage] * (q - qu));
     }
     if (q < ql)
     {
-        return sign_c * (nl_a2[stage] * q * q + nl_a1[stage] * q + nl_a0[stage]);
+      return sign_c * (nl_a2[stage] * q * q + nl_a1[stage] * q + nl_a0[stage]);
     }
     const float temp = pow(nl_Fl_scaled[stage] * q, nl_gamma);
     return sign_c * (nl_scale * (temp / (temp + nl_offset)));
@@ -621,13 +623,13 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   {
     if (nl >= nl_fqu[stage])
     {
-        return (nl - nl_fqu[stage]) / nl_upper_slope[stage] + qu;
+      return (nl - nl_fqu[stage]) / nl_upper_slope[stage] + qu;
     }
     if (nl <= nl_fql[stage])
     {
       // Quadratic solve
-      const float c_ = nl / nl_a2[stage]; // TODO: no + a0
-      const float u = sqrt(nl_average_roots[stage] * nl_average_roots[stage] + c_);
+      const float c_ = nl / nl_a2[stage];        // TODO: no + a0
+      const float u  = sqrt(nl_average_roots[stage] * nl_average_roots[stage] + c_);
       return float(nl_average_roots[stage] - u); // (average_roots < u) ? average_roots + u : ... always take this root
     }
 
@@ -637,9 +639,9 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
   float3 post_adaptation_non_linear_response_compression_inverse_wheatley(float3 nonlinear, int stage)
   {
-    const float3 nl = fabs(nonlinear);
+    const float3 nl     = fabs(nonlinear);
     const float3 sign_c = sign(nonlinear);
-    float3 linear;
+    float3       linear;
     linear.x = post_adaptation_non_linear_response_compression_inverse_wheatley_f(nl.x, stage);
     linear.y = post_adaptation_non_linear_response_compression_inverse_wheatley_f(nl.y, stage);
     linear.z = post_adaptation_non_linear_response_compression_inverse_wheatley_f(nl.z, stage);
@@ -910,7 +912,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     }
 
     // First matrix to limiting gamut for clamping
-    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ); // TODO compine into one
+    float3 luminanceRGB = vector_dot(XYZ_to_RGB_limit, luminanceXYZ); // TODO combine into one
     luminanceRGB *= fitWhiteScale;
 
     if (softclampOutput)
@@ -988,7 +990,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   //
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, float3 surround, bool HK_mode, int stage)
   {
-        // # Step 1
+    // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
     float3 RGB = vector_dot(CAT_CAT16, XYZ);
 
@@ -1024,11 +1026,11 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     // # Step 9
     // # Computing the correlate of *colourfulness* :math:`M`.
     const float et = eccentricity_factor(hr);
-    float M = 43.0f * surround.z * et * sqrt(a * a + b * b);
+    float       M  = 43.0f * surround.z * et * sqrt(a * a + b * b);
 
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * div(M, Q); // possible div by 0
-  
+
     if (HK_mode)
     {
       // # Computing the correlate of *chroma* :math:`C`.
@@ -1037,7 +1039,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
       J = sqrt(J * J + 66.0f * C); //J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
       // float Q_HK = (2.0f / surround.y) * (J / 100.0f) * A_w[stage];
     }
-    
+
     if (J == 0.0f)
       M = 0.0f;
     return {J, M, h};
@@ -1045,22 +1047,22 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
   float3 Hellwig2022_JMh_to_XYZ(float3 JMh, float3 surround, bool HK_mode, int stage)
   {
-    float J = JMh.x;
-    const float M = JMh.y;
+    float       J  = JMh.x;
+    const float M  = JMh.y;
     const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
     if (HK_mode)
     {
       const float C = (M * 35.0f) / A_w[stage];
-      J = sqrt(J * J - 66.0f * C); //J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
+      J             = sqrt(J * J - 66.0f * C); //J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
     const float A = A_w[stage] * pow(J / 100.0f, 1.0f / (surround.y * z[stage]));
 
     // # Computing *P_p_1* to *P_p_2*.
-    const float et = eccentricity_factor(hr);
+    const float et    = eccentricity_factor(hr);
     const float P_p_1 = 43.0f * et * surround.z;
     const float P_p_2 = A;
 
@@ -1100,7 +1102,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     return int((high + low) / 2); // Integer division
   }
 
-  int find_upper_hue_in_table(float h, float3 *table, int table_size)
+  int find_upper_hue_in_table(float h, float3* table, int table_size)
   {
     int low_i  = 0;
     int high_i = table_size - 1;
@@ -1272,6 +1274,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
   {
     float e_t = 1.0f;
 
+    // clang-format off
     // CAM16
     if (cc_et == 0)
     {
@@ -1293,7 +1296,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
         + 0.0289f * cos(_4_h)
         - 0.1475f * sin(_h)
         - 0.0308f * sin(_2_h)
-        + 0.0385f * sin(_3_h)
+             + 0.0385f * sin(_3_h)
         + 0.0096f * sin(_4_h)
         + 1.0f
       );
@@ -1311,13 +1314,15 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
               0.00f * sin(hr3) +
               1.86f) * 0.58f;
     }
+    // clang-format on
+
     return e_t;
   }
 
   float cusp_with_eccentricity_factor(float h)
   {
     const float2 JMcusp = ccuspFromTable(h);
-    const float hr = radians(h);
+    const float  hr     = radians(h);
 
     return JMcusp.y * eccentricity_factor(hr); // TODO: bake into init
   }
@@ -1354,7 +1359,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
 
     float nJ    = JMh.x / limitJmax;
     float snJ   = max(0.0f, 1.0f - nJ);
-    float Mnorm = cusp_with_eccentricity_factor(JMh.z); // TODO: why do we use the eccentricity here and nowhere else?
+    float Mnorm = cusp_with_eccentricity_factor(JMh.z);                  // TODO: why do we use the eccentricity here and nowhere else?
     float limit = pow(nJ, model_gamma) * cReachFromTable(JMh.z) / Mnorm; // e.g. cReachFromTable call here
 
     if (!invert)
@@ -1444,7 +1449,7 @@ float post_adaptation_non_linear_response_compression_forward_original_f(float c
     return inputRGB;
   }
 
-float Y_to_Hellwig_J(float Y, float3 surround, int stage)
+  float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   {
     // Viewing conditions dependent parameters (could be pre-calculated)
     const float _F_L  = F_L[stage];
@@ -1458,9 +1463,9 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   float Hellwig_J_to_Y(float J, float3 surround, int stage)
   {
     // Viewing conditions dependent parameters (could be pre-calculated)
-    const float _F_L   = F_L[stage];
-    const float F_L_W  = pow(_F_L, 0.42f); // TODO: fix me
-    const float _A_w   = (400.0f * F_L_W) / (27.13f + F_L_W);
+    const float _F_L  = F_L[stage];
+    const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
+    const float _A_w  = (400.0f * F_L_W) / (27.13f + F_L_W);
 
     const float A = _A_w * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
     return sign(J) * 100.0f / _F_L * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
@@ -1507,7 +1512,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   float3 inverseTonescale(float3 JMh, int stage)
   {
     float3 tonemappedJMh = JMh;
-    float3 surround = viewingConditionsToSurround(viewingConditions);
+    float3 surround      = viewingConditionsToSurround(viewingConditions);
 
     if (!applyTonecurve && !applyChromaCompression)
     {
@@ -1533,7 +1538,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     if (applyTonecurve)
     {
-      float untonemappedJ = Y_to_Hellwig_J(linear, surround, stage);
+      float untonemappedJ   = Y_to_Hellwig_J(linear, surround, stage);
       untonemappedColourJMh = float3(untonemappedJ, tonemappedJMh.y, tonemappedJMh.z);
     }
 
@@ -1560,7 +1565,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   float3 findGamutBoundaryIntersection(float3 JMh_s, float2 JM_cusp, float J_focus, float J_max, float slope_gain, float smoothness,
                                        float2 estimated_hull_gammas)
   {
-    float2 JM_source         = float2(JMh_s.x, JMh_s.y);
+    float2      JM_source    = float2(JMh_s.x, JMh_s.y);
     const float gamma_top    = estimated_hull_gammas.x;
     const float gamma_bottom = estimated_hull_gammas.y;
 
@@ -1582,8 +1587,8 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
 
-    float M_boundary_upper = JM_cusp.y * (J_max - J_intersect_cusp)
-      * pow((J_max - J_intersect_source) / (J_max - J_intersect_cusp), gamma_top) / (slope * JM_cusp.y + J_max - JM_cusp.x);
+    float M_boundary_upper = JM_cusp.y * (J_max - J_intersect_cusp) * pow((J_max - J_intersect_source) / (J_max - J_intersect_cusp), gamma_top)
+      / (slope * JM_cusp.y + J_max - JM_cusp.x);
 
     float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
 
@@ -1592,7 +1597,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     return float3(J_boundary, M_boundary, J_intersect_source);
   }
 
-  float3 getReachBoundry(float3 Jmh)
+  float3 getReachBoundary(float3 Jmh)
   {
     const float h = Jmh.z;
 
@@ -1685,27 +1690,27 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     float2 JMcusp     = cuspFromTable(JMh.z);
     float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
     float  slope_gain = compute_slope_gain(Jx, JMcusp.x);
-  
-    // Find gamut intersection 
+
+    // Find gamut intersection
     const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-    float3 nickBoundryReturn = findGamutBoundaryIntersection(JMh, JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
-    float2 JMboundary        = float2(nickBoundryReturn.x, nickBoundryReturn.y);
-    float2 project_to        = float2(nickBoundryReturn.z, 0.0f);
-    float  projectJ          = nickBoundryReturn.z;
+    float3 ganutBoundary = findGamutBoundaryIntersection(JMh, JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
+    float2 JMboundary    = float2(ganutBoundary.x, ganutBoundary.y);
+    float2 project_to    = float2(ganutBoundary.z, 0.0f);
+    float  projectJ      = ganutBoundary.z;
 
     // Get hue dependent compression parameters
-    const float3 JMh_boundary = float3(JMboundary.x, JMboundary.y, JMh.z);
-    float locusMax   = getReachBoundry(JMh_boundary).y;
-    float difference = max(1.0001f, locusMax / JMh_boundary.y); // TODO: magic threshold?
-    float threshold  = max(compressionFuncParams.x, 1.0f / difference);
-    float4 interpolatedCompressionFuncParams = float4(threshold, difference, difference, compressionFuncParams.w);
+    const float3 JMh_boundary                      = float3(JMboundary.x, JMboundary.y, JMh.z);
+    float        locusMax                          = getReachBoundry(JMh_boundary).y;
+    float        difference                        = max(1.0001f, locusMax / JMh_boundary.y); // TODO: magic threshold?
+    float        threshold                         = max(compressionFuncParams.x, 1.0f / difference);
+    float4       interpolatedCompressionFuncParams = float4(threshold, difference, difference, compressionFuncParams.w);
 
     // Compress the out of gamut color along the projection line
-    float2 JMcompressed = project_from;
+    float2 JMcompressed;
 
     const float lowerMlimit = 0.0001f; // Testing a small value here // TODO
     if (JMh.x < limitJmax
-        && JMh.y > lowerMlimit)  // using a small value to test against here rather than 0.0, and I was getting Nans on inversion.
+        && JMh.y > lowerMlimit)        // using a small value to test against here rather than 0.0, and I was getting Nans on inversion.
     {
       float v      = project_from.y / JMboundary.y;
       v            = compressPowerP(v, interpolatedCompressionFuncParams.x,
@@ -1718,7 +1723,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       JMcompressed = float2(JMh.x, 0.0f);
     }
 
-    if (diagnosticMode == 12)
+    if (diagnosticMode == 12) // TODO: do these diagnostics modes hint at functions we should make
     {
       return float3(JMboundary.x, JMboundary.y, JMh.z);
     }
@@ -1731,11 +1736,8 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       // return focus point
       return float3(project_to.x, project_to.y, JMh.z);
     }
-    // actual output
-    else
-    {
-      return float3(JMcompressed.x, JMcompressed.y, JMh.z);
-    }
+
+    return float3(JMcompressed.x, JMcompressed.y, JMh.z);
   }
 
   // Generate the Hellwig2022 post adaptation non-linear compression matrix
@@ -1747,12 +1749,14 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   //  460.0f, -220.0f, -6300.0f
   void generate_panlrcm()
   {
+    // clang-format off
     float panlrcm_data[]=
     {
       achromatic_weights.x, achromatic_weights.y, achromatic_weights.z,
       a_weights.x, a_weights.y, a_weights.z, 
-      b_weights.x, b_weights.y, b_weights.z, 
+      b_weights.x, b_weights.y, b_weights.z,
     };
+    // clang-format on
     panlrcm.setArray(panlrcm_data);
     panlrcm = panlrcm.invert();
 
@@ -1826,7 +1830,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // 1.0f / (c * z) // TODO: investigate uses
     model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
 
-    clamped_smoothness = max(0.000001f, smoothCusps);
+    clamped_smoothness  = max(0.000001f, smoothCusps);
     smooth_cusp_scale.x = 1.0f + smoothJ * clamped_smoothness;
     smooth_cusp_scale.y = 1.0f + smoothM * clamped_smoothness;
 
@@ -1857,7 +1861,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       0.656619, 0.342071, 0.00131062, -0.222571, 1.10658, 0.115987, -0.000634146, 0.05855, 0.942084,
     };
 
-   // populate the input primaries matrix
+    // populate the input primaries matrix
     RGB_to_XYZ_input = generate_RGB_to_XYZ_matrix(primariesIn);
     XYZ_to_RGB_input = RGB_to_XYZ_input.invert();
 
@@ -1952,8 +1956,8 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     CAT_CAT16_INVERSE = CAT_CAT16.invert();
 
     achromatic_weights = float3(ra, 1.0f, ba);
-    a_weights   = float3(11.0f, -12.0f, 1.0f) / 11.0f;
-    b_weights   = float3(1.0f, 1.0f, -2.0f) / 9.0f;
+    a_weights          = float3(11.0f, -12.0f, 1.0f) / 11.0f;
+    b_weights          = float3(1.0f, 1.0f, -2.0f) / 9.0f;
     generate_panlrcm();
 
     precompute_hellwig(inWhite, viewingConditions, L_A, Y_b, discountIlluminant_in, 0);
@@ -2010,13 +2014,13 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       // Scale to fit maximum creative white channel value
       float3 creativeWhiteXYZ = vector_dot(RGB_to_XYZ_limit, float3(1.0f, 1.0f, 1.0f));
       float3 creativeWhiteRGB = vector_dot(XYZ_to_RGB_output, creativeWhiteXYZ);
-      fitWhiteScale = 1.0f / max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
+      fitWhiteScale           = 1.0f / max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
     }
   }
 
-  inline float compute_base_exponential_nonlinearity(float Y_backgrounf, float Y_white)
+  inline float compute_base_exponential_nonlinearity(float Y_background, float Y_white)
   {
-    return 1.48f + sqrt(Y_backgrounf / Y_white);
+    return 1.48f + sqrt(Y_background / Y_white);
   }
 
   void precompute_hellwig(float3 referenceWhite, int viewingConditions, float _L_A, float Y_b, bool discountIlluminant, int stage)
@@ -2032,7 +2036,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // # Computing degree of adaptation :math:`D`.
     if (!discountIlluminant)
     {
-      float D = clamp(degree_of_adaptation(surround.x, _L_A), 0, 1);
+      float D      = clamp(degree_of_adaptation(surround.x, _L_A), 0, 1);
       D_RGB[stage] = D * XYZ_w_scaled.y / RGB_w + 1 - D;
     }
     else
@@ -2042,43 +2046,43 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
 
     const float k  = 1.0f / (5.0f * _L_A + 1.0f);
     const float k4 = k * k * k * k;
-    F_L[stage] = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f);
+    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f);
 
     z[stage] = compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
 
     // # Computing achromatic responses for the whitepoint.
     const float3 RGB_wc = D_RGB[stage] * RGB_w;
     const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
-    A_w[stage] = dot(achromatic_weights, RGB_aw);
+    A_w[stage]          = dot(achromatic_weights, RGB_aw);
   }
 
   void initialise_non_linearity(int stage)
   {
-     nl_Fl_scaled[stage] = F_L[stage] * nl_normalise;
-     nl_derivative_scale[stage] = nl_d_scale * nl_Fl_scaled[stage];
+    nl_Fl_scaled[stage]        = F_L[stage] * nl_normalise;
+    nl_derivative_scale[stage] = nl_d_scale * nl_Fl_scaled[stage];
 
     // Break point calculations
-     nl_fql[stage] = post_adaptation_non_linear_response_compression_forward_wheatley_f(ql, stage);
-     nl_fqu[stage] = post_adaptation_non_linear_response_compression_forward_wheatley_f(qu, stage);
-     nl_lower_slope[stage] = nl_fql[stage] / ql;
-     nl_upper_slope[stage] = post_adaptation_non_linear_response_compression_forward_derivative_wheatley(qu, stage);
-     const float ql_derivative = post_adaptation_non_linear_response_compression_forward_derivative_wheatley(ql, stage);
+    nl_fql[stage]             = post_adaptation_non_linear_response_compression_forward_wheatley_f(ql, stage);
+    nl_fqu[stage]             = post_adaptation_non_linear_response_compression_forward_wheatley_f(qu, stage);
+    nl_lower_slope[stage]     = nl_fql[stage] / ql;
+    nl_upper_slope[stage]     = post_adaptation_non_linear_response_compression_forward_derivative_wheatley(qu, stage);
+    const float ql_derivative = post_adaptation_non_linear_response_compression_forward_derivative_wheatley(ql, stage);
 
-     // precompute lower Quadratic parameters
-     nl_a2[stage] = (ql * ql_derivative - nl_fql[stage]) / (ql * ql);
-     nl_a1[stage] = ql_derivative - 2 * ql * nl_a2[stage];
-     nl_a0[stage] = 0.0; // TODO for now pass through origin
-     nl_b_[stage] = nl_a1[stage] / nl_a2[stage];
-     nl_average_roots[stage] = -nl_b_[stage] / 2;
+    // precompute lower Quadratic parameters
+    nl_a2[stage]            = (ql * ql_derivative - nl_fql[stage]) / (ql * ql);
+    nl_a1[stage]            = ql_derivative - 2 * ql * nl_a2[stage];
+    nl_a0[stage]            = 0.0; // TODO for now pass through origin
+    nl_b_[stage]            = nl_a1[stage] / nl_a2[stage];
+    nl_average_roots[stage] = -nl_b_[stage] / 2;
   }
 
   void initialise_non_linearities()
   {
-    nl_gamma = 0.42f;
+    nl_gamma     = 0.42f;
     nl_normalise = 100.0f;
-    nl_scale = 400.0f;
-    nl_offset = 27.13f;
-    nl_d_scale = nl_gamma * nl_scale * nl_offset;
+    nl_scale     = 400.0f;
+    nl_offset    = 27.13f;
+    nl_d_scale   = nl_gamma * nl_scale * nl_offset;
 
     for (int i = 0; i < 3; ++i)
     {
@@ -2086,7 +2090,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     }
   }
 
-  void initialise_cusp_table(float3 *output_table, const int table_size, const float3x3& matrix)
+  void initialise_cusp_table(float3 * output_table, const int table_size, const float3x3& matrix)
   {
     // the 'tempTableUnsorted' table is populated
     // in increments of H of the limiting gamut HSV space starting at H=0.0
@@ -2094,7 +2098,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     // the entries are then wrap-around shifted
     // so that the 'gamutCuspTable' starts with the lowest JMh.h value
     float3 tempTableUnsorted[360];
-    int minhIndex = 0;
+    int    minhIndex = 0;
     for (int i = 0; i < table_size; ++i)
     {
       const float  hNorm   = float(i) / (table_size);
@@ -2108,7 +2112,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     copy_table_rotated(tempTableUnsorted, table_size, output_table, minhIndex);
   }
 
-  void copy_table_rotated(float3 *tableUnsorted, const int tableSize, float3 output_table[], const int offsetIndex)
+  void copy_table_rotated(float3 * tableUnsorted, const int tableSize, float3 output_table[], const int offsetIndex)
   {
     for (int i = 0; i < tableSize; ++i)
     {
@@ -2116,7 +2120,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     }
   }
 
-  void initialise_reach_cusp_table(float3 *output_table, const int table_size, const float limitJ, const float3x3& matrix)
+  void initialise_reach_cusp_table(float3 * output_table, const int table_size, const float limitJ, const float3x3& matrix)
   {
     const float search_range = 100.0;
     for (int i = 0; i < table_size; ++i)
@@ -2172,7 +2176,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float focusJ = lerp(JMcusp.x, midJ, min(1.0, cuspMidBlend - (JMcusp.x / limitJmax)));
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
+      const float  slope_gain            = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
 
       const float3 approxLimit =
@@ -2265,11 +2269,11 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     const float focusJ = lerp(JMcusp.x, midJ, cuspMidBlend);
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float slope_gain = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
+      const float  slope_gain            = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
 
-      const float3 approxLimit     = findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax,
-                                                                   slope_gain, clamped_smoothness, estimated_hull_gammas);
+      const float3 approxLimit =
+        findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
       const float3 newLimitRGB     = JMh_to_RGB(approximate_JMh, XYZ_to_RGB_limit);
 
@@ -2296,7 +2300,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
 
-      gamutGammas[i].y = -1.0f;
+      gamutGammas[i].y    = -1.0f;
       const float2 JMcusp = cuspFromTable(hue);
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
@@ -2425,7 +2429,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 19)
     {
       // output Reach boundary
-      diagnostic = getReachBoundry(srcRGB);
+      diagnostic = getReachBoundary(srcRGB);
     }
     else if (diagnosticMode == 20)
     {
@@ -2435,25 +2439,25 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if ((diagnosticMode == 21) || (diagnosticMode == 27))
     {
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      diagnostic = float3(estimated_hull_gammas.x, estimated_hull_gammas.y, 0.0f);
+      diagnostic                         = float3(estimated_hull_gammas.x, estimated_hull_gammas.y, 0.0f);
     }
     else if (diagnosticMode == 22)
     {
       float2 JMcusp = cuspFromTable(srcRGB.z);
       // create test value halfway between the cusp and the Jmax
-      diagnostic       = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
+      diagnostic = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
     }
     else if ((diagnosticMode == 23) || (diagnosticMode == 24))
     {
       float2 JMcusp = cuspFromTable(srcRGB.z);
       // create test value halfway between the cusp and the Jmax
-      float  slope_gain  = limitJmax * focusDist; // TODO: is this diagnostic correct no focus gain in calculation
-      float3 testJmh     = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
+      float  slope_gain = limitJmax * focusDist; // TODO: is this diagnostic correct no focus gain in calculation
+      float3 testJmh    = float3(JMcusp.x + ((limitJmax - JMcusp.x) / 2.0f), JMcusp.y, srcRGB.z);
 
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      float3 approxLimit = findGamutBoundaryIntersection(testJmh, JMcusp, (JMcusp.x + 38.0f) / 2, limitJmax, slope_gain, clamped_smoothness,
-                                                         estimated_hull_gammas);
-      diagnostic         = float3(approxLimit.x, approxLimit.y, srcRGB.z);
+      float3       approxLimit =
+        findGamutBoundaryIntersection(testJmh, JMcusp, (JMcusp.x + 38.0f) / 2, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
+      diagnostic = float3(approxLimit.x, approxLimit.y, srcRGB.z);
       if (diagnosticMode == 24)
       {
         diagnostic = JMh_to_RGB(float3(approxLimit.x, approxLimit.y, srcRGB.z), XYZ_to_RGB_limit);
@@ -2461,14 +2465,14 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     }
     else if (diagnosticMode == 25)
     {
-      float2 JMcusp            = cuspFromTable(srcRGB.z);
-      float  focusJ            = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
-      float  slope_gain        = compute_slope_gain(JMh.x, JMcusp.x);
+      float2 JMcusp     = cuspFromTable(srcRGB.z);
+      float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
+      float  slope_gain = compute_slope_gain(JMh.x, JMcusp.x);
 
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      float3 nickBoundryReturn = findGamutBoundaryIntersection(srcRGB, JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness,
-                                                               estimated_hull_gammas);
-      diagnostic               = float3(srcRGB.x, nickBoundryReturn.y, srcRGB.z);
+      float3       ganutBoundary =
+        findGamutBoundaryIntersection(srcRGB, JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
+      diagnostic = float3(srcRGB.x, ganutBoundary.y, srcRGB.z);
     }
     else if (diagnosticMode == 26)
     {
@@ -2482,8 +2486,8 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
       float2 JMcusp = cuspFromTable(srcRGB.z);
 
       const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
-      diagnostic    = findGamutBoundaryIntersection(srcRGB, JMcusp, lerp(JMcusp.x, midJ, cuspMidBlend), limitJmax, 10000.0f, 0.000001f,
-                                                    estimated_hull_gammas);
+      diagnostic =
+        findGamutBoundaryIntersection(srcRGB, JMcusp, lerp(JMcusp.x, midJ, cuspMidBlend), limitJmax, 10000.0f, 0.000001f, estimated_hull_gammas);
     }
 
     // extra modes to allow for easier breakout of the order of events.
@@ -2494,7 +2498,7 @@ float Y_to_Hellwig_J(float Y, float3 surround, int stage)
     else if (diagnosticMode == 100)
     {
       // display encoding to display linear
-      diagnostic      = encodingToLuminance3(encodingIn, srcRGB);
+      diagnostic = encodingToLuminance3(encodingIn, srcRGB);
     }
     else if (diagnosticMode == 101)
     {
