@@ -322,6 +322,7 @@ local:
   float  z[3];
   float3 D_RGB[3];
   float  A_w[3];
+  float  y_to_j_A_w[3];
   float3 achromatic_weights;
   float3 a_weights;
   float3 b_weights;
@@ -1451,24 +1452,14 @@ local:
 
   float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   {
-    // Viewing conditions dependent parameters (could be pre-calculated)
-    const float _F_L  = F_L[stage];
-    const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
-    const float _A_w  = (400.0f * F_L_W) / (27.13f + F_L_W);
-
-    const float F_L_Y = pow(_F_L * fabs(Y) / 100.0f, 0.42f);
-    return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / _A_w, surround.y * z[stage]);
+    const float F_L_Y = pow(F_L[stage] * fabs(Y) / 100.0f, 0.42f);
+    return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / y_to_j_A_w[stage], surround.y * z[stage]);
   }
 
   float Hellwig_J_to_Y(float J, float3 surround, int stage)
   {
-    // Viewing conditions dependent parameters (could be pre-calculated)
-    const float _F_L  = F_L[stage];
-    const float F_L_W = pow(_F_L, 0.42f); // TODO: fix me
-    const float _A_w  = (400.0f * F_L_W) / (27.13f + F_L_W);
-
-    const float A = _A_w * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
-    return sign(J) * 100.0f / _F_L * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
+    return sign(J) * 100.0f / F_L[stage] * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
   }
 
   float3 forwardTonescale(float3 inputJMh, int stage)
@@ -1828,7 +1819,7 @@ local:
     model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
 
     clamped_smoothness  = max(0.000001f, smoothCusps);
-    smooth_cusp_scale.x = 1.0f + smoothJ * clamped_smoothness;
+    smooth_cusp_scale.x = 1.0f + smoothJ * clamped_smoothness; // TODO Do we need to translate in J
     smooth_cusp_scale.y = 1.0f + smoothM * clamped_smoothness;
 
     // Chroma compression scaling for HDR/SDR appearance match
@@ -2051,6 +2042,10 @@ local:
     const float3 RGB_wc = D_RGB[stage] * RGB_w;
     const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
     A_w[stage]          = dot(achromatic_weights, RGB_aw);
+
+     // Viewing conditions dependent parameters (could be pre-calculated)
+    const float F_L_W = pow(F_L[stage], 0.42f); // TODO: fix me
+    y_to_j_A_w[stage]  = (400.0f * F_L_W) / (27.13f + F_L_W);
   }
 
   void initialise_non_linearity(int stage)
