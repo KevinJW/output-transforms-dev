@@ -2043,8 +2043,8 @@ local:
     const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
     A_w[stage]          = dot(achromatic_weights, RGB_aw);
 
-     // Viewing conditions dependent parameters (could be pre-calculated)
-    const float F_L_W = pow(F_L[stage], 0.42f); // TODO: fix me
+    // Viewing conditions dependent parameters, different to A_w
+    const float F_L_W = pow(F_L[stage], 0.42f);
     y_to_j_A_w[stage]  = (400.0f * F_L_W) / (27.13f + F_L_W);
   }
 
@@ -2581,6 +2581,14 @@ local:
     else if (diagnosticMode == 302)
     {
       diagnostic = float3(limitJmax, RGB_to_XYZ_limit[0][0], RGB_to_XYZ_limit[0][1]);
+    }
+    else if (diagnosticMode == 303)
+    {
+      diagnostic = float3(A_w[0], A_w[1], A_w[2]);
+    }
+    else if (diagnosticMode == 304)
+    {
+      diagnostic = float3(y_to_j_A_w[0], y_to_j_A_w[1], y_to_j_A_w[2]);
     }
 
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
