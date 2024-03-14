@@ -66,10 +66,10 @@ param:
 
   // Toggle chroma compression
   bool applyChromaCompression;
-  bool applyInGamutExpansion;
-  bool applyInGamutCompression;
-  bool applyReachClamp;
-  bool monochrome;
+  bool applyInGamutExpansion; // unused
+  bool applyInGamutCompression; // Unused
+  bool applyReachClamp;  // U*nused
+  bool monochrome; // Unused
 
   // Chroma compression params
   float chroma_compress;
@@ -985,8 +985,6 @@ local:
   // NOTE: Following modifications have been made to stock Hellwig2022 model for this DRT:
   //
   // - Custom primaries
-  // - Eccentriticty factor has been removed
-  // - Compress mode
   //
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, float3 surround, bool HK_mode, int stage)
   {
@@ -1283,7 +1281,7 @@ local:
       const float _3_h = 3 * hr;
       const float _4_h = 4 * hr;
       e_t = (
-        -0.0582f * cos(_h)
+        - 0.0582f * cos(_h)
         - 0.0258f * cos(_2_h)
         - 0.1347f * cos(_3_h)
         + 0.0289f * cos(_4_h)
@@ -1355,44 +1353,31 @@ local:
       // keep the M/J ratio correct (keeping the chromaticities constant).
       M *= pow(JMh.x / origJ, model_gamma);
 
-      if (applyInGamutCompression)
-      {
-        // Normalize M with the rendering space cusp M
-        M /= Mnorm;
+      // Normalize M with the rendering space cusp M
+      M /= Mnorm;
 
-        // Expand the colorfulness by running the toe function in reverse.  The goal is to
-        // expand less saturated colors less and more saturated colors more.  The expansion
-        // increases saturation in the shadows and mid-tones but not in the highlights.
-        // The 0.001 offset starts the expansions slightly above zero.  The sat_thr makes
-        // the toe less aggressive near black to reduce the expansion of noise.
-        if (applyInGamutExpansion)
-          M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 0);
+      // Expand the colorfulness by running the toe function in reverse.  The goal is to
+      // expand less saturated colors less and more saturated colors more.  The expansion
+      // increases saturation in the shadows and mid-tones but not in the highlights.
+      // The 0.001 offset starts the expansions slightly above zero.  The sat_thr makes
+      // the toe less aggressive near black to reduce the expansion of noise.
+      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 0);
 
-        // Compress the colorfulness.  The goal is to compress less saturated colors more and
-        // more saturated colors less, especially in the highlights.  This step creates the
-        // saturation roll-off in the highlights, but attemps to preserve pure colors.  This
-        // mostly affects highlights and mid-tones, and does not compress shadows.
-        M = toe(M, limit, nJ * compr, snJ, 0);
+      // Compress the colorfulness.  The goal is to compress less saturated colors more and
+      // more saturated colors less, especially in the highlights.  This step creates the
+      // saturation roll-off in the highlights, but attemps to preserve pure colors.  This
+      // mostly affects highlights and mid-tones, and does not compress shadows.
+      M = toe(M, limit, nJ * compr, snJ, 0);
 
-        // Clamp M to the rendering space
-        if (applyReachClamp)
-          M = min(limit, M);
-
-        // Denormalize
-        M *= Mnorm;
-      }
+      // Denormalize
+      M *= Mnorm;
     }
     else
     {
-      if (applyInGamutCompression)
-      {
-        M /= Mnorm;
-        M = toe(M, limit, nJ * compr, snJ, 1);
-        if (applyInGamutExpansion)
-          M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 1);
-        M *= Mnorm;
-      }
-
+      M /= Mnorm;
+      M = toe(M, limit, nJ * compr, snJ, 1);
+      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 1);
+      M *= Mnorm;
       M *= pow(JMh.x / origJ, -model_gamma);
     }
 
@@ -1476,11 +1461,6 @@ local:
     if (applyChromaCompression)
     {
       outputJMh.y = chromaCompression(tonemappedJMh, inputJMh.x, linear, 0);
-    }
-
-    if (monochrome)
-    {
-      outputJMh.y = 0.0f;
     }
 
     return outputJMh;
@@ -2583,6 +2563,12 @@ local:
       srcRGB.z = wrap_to_360(srcRGB.z);
       diagnostic = getReachBoundary(srcRGB);
     }
+    else if (diagnosticMode == 308)
+    {
+      const float value = eccentricity_factor(radians(wrap_to_360(srcRGB.z)));
+      diagnostic = float3(value, cc_et, srcRGB.z);
+    }
+
 
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
