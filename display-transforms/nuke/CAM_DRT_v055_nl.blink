@@ -291,12 +291,12 @@ local:
   float  clamped_smoothness;
   float2 smooth_cusp_scale;
 
-  // both tables need to be declared here since temporary array variables
-  // in the init() fuction seem to crash Nuke on some systems
-  float3 limitingGamutCuspTable[360];
-  float3 cgamutCuspTable[360];
 
   // 361 - Adds an extra entry to wrap the hues without branching
+  // Non-uniform in h
+  float3 limitingGamutCuspTable[361];
+  float3 cgamutCuspTable[361];
+  // Uniform h
   float3 reachGamutCuspTable[361];
   float2 gamutGammas[361];
 
@@ -1115,16 +1115,10 @@ local:
       lo.z = lo.z - 360.0f;
       hi   = limitingGamutCuspTable[0];
     }
-    else if (wrapped_hue >= limitingGamutCuspTable[gamutCuspTableSize - 1].z)
-    {
-      lo   = limitingGamutCuspTable[gamutCuspTableSize - 1];
-      hi   = limitingGamutCuspTable[0];
-      hi.z = hi.z + 360.f;
-    }
     else
     {
       int low_i  = 0;
-      int high_i = gamutCuspTableSize - 1;
+      int high_i = gamutCuspTableSize; // Allowed as we have extra entry in the table
       int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize);
 
       while (low_i + 1 < high_i)
@@ -1162,16 +1156,10 @@ local:
       lo.z = lo.z - 360.0f;
       hi   = cgamutCuspTable[0];
     }
-    else if (wrapped_hue >= cgamutCuspTable[gamutCuspTableSize - 1].z)
-    {
-      lo   = cgamutCuspTable[gamutCuspTableSize - 1];
-      hi   = cgamutCuspTable[0];
-      hi.z = hi.z + 360.f;
-    }
     else
     {
       int low_i  = 0;
-      int high_i = gamutCuspTableSize - 1;
+      int high_i = gamutCuspTableSize; // Allowed as we have extra entry in the table
       int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize);
 
       while (low_i + 1 < high_i)
@@ -2035,6 +2023,10 @@ local:
       }
     }
     copy_table_rotated(tempTableUnsorted, table_size, output_table, minhIndex);
+
+    // Add extra entry to wrap
+    output_table[360] = output_table[0];
+    output_table[360].z = output_table[360].z + 360.0f;
   }
 
   void copy_table_rotated(float3 * tableUnsorted, const int tableSize, float3 output_table[], const int offsetIndex)
@@ -2542,12 +2534,22 @@ local:
       const float value = cReachFromTable(wrap_to_360(srcRGB.z));
       diagnostic = float3(value, value, srcRGB.z);
     }
+    else if (diagnosticMode == 306)
+    {
+      const float2 value = ccuspFromTable(wrap_to_360(srcRGB.z));
+      diagnostic = float3(value.x, value.y, srcRGB.z);
+    }
+    else if (diagnosticMode == 307)
+    {
+      const float3 value = cgamutCuspTable[int(wrap_to_360(srcRGB.z))];
+      diagnostic = float3(value.x, value.y, value.z);
+    }
     else if (diagnosticMode == 308)
     {
       const float value = eccentricity_factor(radians(wrap_to_360(srcRGB.z)));
       diagnostic = float3(value, cc_et, srcRGB.z);
     }
-
+ 
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
 };
