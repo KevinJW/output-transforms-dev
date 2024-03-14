@@ -100,17 +100,6 @@ param:
   // Could add others, or user white point
   int whiteLimit;
 
-  // Primaries of the Gamut reached by the gamut compressor
-  // 0: AP0-ACES
-  // 1: AP1-ACES
-  // 2: sRGB/Rec.709-D65
-  // 3: Rec.2020-D65
-  // 4: P3-D65
-  // 5: P3-DCI
-  // 6: Spectral Locus
-  // 7: Chroma Compression Space
-  int primariesReach; // Unused
-
   // Toggle Gamut Compression
   bool applyGamutCompression;
 
