@@ -875,13 +875,12 @@ local:
     return enc;
   }
 
-  // convert RGB values in the output colorspace to the CAM J (lightness), M (colorfulness) and h (hue) correlates
-  float3 output_RGB_to_JMh(float3 RGB)
+  // convert RGB values in the output colorspace to XYZ
+  float3 output_RGB_to_XYZ(float3 RGB)
   {
     float3 luminanceRGB = encodingToLuminance3(encodingOut, RGB);
     float3 XYZ          = vector_dot(RGB_to_XYZ_output, luminanceRGB);
-    float3 JMh          = XYZ_to_JMh(XYZ, viewingConditions, HK_mode_out, 2);
-    return JMh;
+    return XYZ;
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
@@ -1356,15 +1355,19 @@ local:
     return M;
   }
 
-  float3 input_RGB_to_JMh(float3 inputRGB)
+  float3 input_RGB_to_XYZ(float3 inputRGB)
   {
     // convert to linear XYZ luminance values
     float3 luminanceRGB = encodingToLuminance3(encodingIn, inputRGB);
-    float3 luminanceXYZ = vector_dot(RGB_to_XYZ_input, luminanceRGB);
+    float3 XYZ          = vector_dot(RGB_to_XYZ_input, luminanceRGB);
+    return XYZ;
+}
 
+float3 input_XYZ_to_JMh(float3 luminanceXYZ)
+  {
     if (AP1Clamp)
     {
-      luminanceRGB   = vector_dot(XYZ_to_AP1, luminanceXYZ);
+      float3 luminanceRGB   = vector_dot(XYZ_to_AP1, luminanceXYZ);
       luminanceRGB.x = max(0.0f, luminanceRGB.x);
       luminanceRGB.y = max(0.0f, luminanceRGB.y);
       luminanceRGB.z = max(0.0f, luminanceRGB.z);
@@ -1383,9 +1386,8 @@ local:
     }
   }
 
-  float3 JMh_to_input_RGB(float3 JMh)
+  float3 XYZ_to_input_RGB(float3 luminanceXYZ)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, viewingConditions, HK_mode_in, 0);
     float3 luminanceRGB = vector_dot(XYZ_to_RGB_input, luminanceXYZ);
     float3 inputRGB     = luminanceToEncoding3(encodingIn, luminanceRGB);
 
@@ -2271,18 +2273,24 @@ local:
     float3 compressedJMh;
     float3 tonemappedJMh;
     float3 JMh;
+    float3 XYZ;
     float3 diagnostic;
 
     if (invert)
     {
-      compressedJMh = output_RGB_to_JMh(srcRGB);
+      XYZ           = output_RGB_to_XYZ(srcRGB);
+
+      compressedJMh = XYZ_to_JMh(XYZ, viewingConditions, HK_mode_out, 2);
       tonemappedJMh = compressGamut(compressedJMh, 1);
       JMh           = inverseTonescale(tonemappedJMh, 2);
-      diagnostic    = JMh_to_input_RGB(JMh);
+      XYZ           = JMh_to_XYZ(JMh, viewingConditions, HK_mode_in, 0);
+
+      diagnostic    = XYZ_to_input_RGB(XYZ);
     }
     else
     {
-      JMh           = input_RGB_to_JMh(srcRGB);
+      XYZ           = input_RGB_to_XYZ(srcRGB);
+      JMh           = input_XYZ_to_JMh(XYZ);
       tonemappedJMh = forwardTonescale(JMh, 0);
       compressedJMh = compressGamut(tonemappedJMh, 0);
       diagnostic    = JMh_to_output_RGB(compressedJMh);
@@ -2293,7 +2301,8 @@ local:
       // Mode 6 actually returns XYZ, mode 1 returns real JMh
       if (invert)
       {
-        diagnostic = JMh_to_input_RGB(srcRGB);
+        XYZ = JMh_to_XYZ(srcRGB, viewingConditions, HK_mode_in, 0);
+        diagnostic = XYZ_to_input_RGB(XYZ);
       }
       else
       {
