@@ -231,10 +231,7 @@ local:
   // matrix vars
   float3x3 identity_matrix;
 
-  float3x3 XYZ_to_RGB_input;
   float3x3 XYZ_to_RGB_limit;
-  float3x3 XYZ_to_RGB_output;
-
   float3x3 RGB_to_XYZ_input;
   float3x3 RGB_to_XYZ_limit;
   float3x3 RGB_to_XYZ_output;
@@ -1360,15 +1357,18 @@ local:
     return limitJmax * focusDist * getFocusGain(J, cuspJ);
   }
 
-  float3 compressGamut(float3 JMh, int invert)
+  float3 gamutMapper(float3 JMh, int invert)
   {
+    if (!applyGamutCompression)
+      return JMh;
+
     // Assumes 'h' component is wrapped [0.0, 360.0)
     if (disableFocusGain)
-      return compressGamut2(JMh, invert, JMh.x);
+      return gamutMapper2(JMh, invert, JMh.x);
 
     if (!invert)
     {
-      return compressGamut2(JMh, 0, JMh.x);
+      return gamutMapper2(JMh, 0, JMh.x);
     }
     else
     {
@@ -1377,21 +1377,19 @@ local:
 
       // Analytic inverse below threshold
       if (Jx <= lerp(JMcusp.x, limitJmax, focusGainBlend))
-        return compressGamut2(JMh, 1, Jx);
+        return gamutMapper2(JMh, 1, Jx);
 
       // Approximation above
-      Jx = compressGamut2(JMh, 1, Jx).x;
-      return compressGamut2(JMh, 1, Jx);
+      Jx = gamutMapper2(JMh, 1, Jx).x;
+      return gamutMapper2(JMh, 1, Jx);
     }
   }
 
-  float3 compressGamut2(float3 JMh, int invert, float Jx)
+  float3 gamutMapper2(float3 JMh, int invert, float Jx)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     const float2 project_from = float2(JMh.x, JMh.y);
 
-    if (!applyGamutCompression)
-      return JMh;
     if (project_from.y == 0.0f) // TODO: should this be lowerMlimit
       return JMh;
 
@@ -1545,7 +1543,6 @@ local:
 
     // populate the input primaries matrix
     RGB_to_XYZ_input = generate_RGB_to_XYZ_matrix(primariesIn);
-    XYZ_to_RGB_input = RGB_to_XYZ_input.invert();
 
     // AP1 matrix
     AP1_to_XYZ = generate_RGB_to_XYZ_matrix(1); // AP1 == 1
@@ -1612,7 +1609,7 @@ local:
     XYZ_to_RGB_limit = RGB_to_XYZ_limit.invert();
 
     RGB_to_XYZ_output = generate_RGB_to_XYZ_matrix(primariesOut);
-    XYZ_to_RGB_output = RGB_to_XYZ_output.invert();
+    float3x3 XYZ_to_RGB_output = RGB_to_XYZ_output.invert();
 
     float3 white(1.0f, 1.0f, 1.0f);
     inWhite    = vector_dot(RGB_to_XYZ_input, white);
@@ -2034,22 +2031,25 @@ local:
     float3 JMh;
     float3 tonemappedJMh;
     float3 compressedJMh;
+    float3 gamutMappedJMh;
     float3 outputXYZ;
     float3 diagnostic;
 
     if (invert)
     {
-      compressedJMh = XYZ_to_JMh(src, outputViewingConditions, HK_mode_out, 2);
-      tonemappedJMh = compressGamut(compressedJMh, 1);
-      JMh           = inverseTonescale(tonemappedJMh, 2);
-      diagnostic    = JMh_to_XYZ(JMh, inputViewingConditions, HK_mode_in, 0);
+      gamutMappedJMh = XYZ_to_JMh(src, outputViewingConditions, HK_mode_out, 2);
+      compressedJMh  = gamutMapper(gamutMappedJMh, 1);
+      tonemappedJMh  = compressedJMh;
+      JMh            = inverseTonescale(tonemappedJMh, 2);
+      diagnostic     = JMh_to_XYZ(JMh, inputViewingConditions, HK_mode_in, 0);
     }
     else
     {
-      JMh           = input_XYZ_to_JMh(src);
-      tonemappedJMh = forwardTonescale(JMh, 0);
-      compressedJMh = compressGamut(tonemappedJMh, 0);
-      diagnostic    = JMh_to_XYZ(compressedJMh, outputViewingConditions, HK_mode_out, 2);
+      JMh            = input_XYZ_to_JMh(src);
+      tonemappedJMh  = forwardTonescale(JMh, 0);
+      compressedJMh  = tonemappedJMh;
+      gamutMappedJMh = gamutMapper(compressedJMh, 0);
+      diagnostic     = JMh_to_XYZ(gamutMappedJMh, outputViewingConditions, HK_mode_out, 2);
     }
 
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
