@@ -1112,7 +1112,7 @@ local:
   // appropriate rate of change from display black to display white, and from
   // achromatic outward to purer colors.
   //
-  float chromaCompression(float3 JMh, float origJ, float linear, int invert)
+  float chromaCompression(float3 JMh, float origJ, int invert)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     float M = JMh.y;
@@ -1162,7 +1162,7 @@ local:
     return M;
   }
 
-  float3 input_XYZ_to_JMh(float3 luminanceXYZ)
+  float3 clamp_to_AP1(float3 luminanceXYZ)
   {
     if (AP1Clamp)
     {
@@ -1172,9 +1172,7 @@ local:
       luminanceRGB.z = max(0.0f, luminanceRGB.z);
       luminanceXYZ   = vector_dot(AP1_to_XYZ, luminanceRGB);
     }
-
-    float3 JMh = XYZ_to_JMh(luminanceXYZ, inputViewingConditions, HK_mode_in, 0);
-    return JMh;
+    return luminanceXYZ;
   }
 
   float Y_to_Hellwig_J(float Y, float3 surround, int stage)
@@ -1192,8 +1190,12 @@ local:
   float3 forwardTonescale(float3 inputJMh, int stage)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
-    float3 outputJMh;
-    float3 surround    = viewingConditionsToSurround(inputViewingConditions);
+    if (!applyTonecurve)
+    {
+      return inputJMh;
+    }
+
+    float3 surround    = viewingConditionsToSurround(inputViewingConditions); // TODO: stage ?
     float  linear      = Hellwig_J_to_Y(inputJMh.x, surround, stage) / referenceLuminance;
     float  luminanceTS = linear;
 
@@ -1206,38 +1208,30 @@ local:
     float  tonemappedJ   = Y_to_Hellwig_J(luminanceTS, surround, stage);
     float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
 
-    if (applyTonecurve)
-    {
-      outputJMh = tonemappedJMh;
-    }
-    else
-    {
-      outputJMh = inputJMh;
-    }
+    return tonemappedJMh;
+  }
 
+  float3 compressChroma(float3 JMh, float originalJ, int inverse)
+  {
     if (applyChromaCompression)
     {
-      outputJMh.y = chromaCompression(tonemappedJMh, inputJMh.x, linear, 0);
+      JMh.y = chromaCompression(JMh, originalJ, inverse);
+      if (inverse)
+        JMh.x = originalJ;
     }
-
-    return outputJMh;
+    return JMh;
   }
 
   float3 inverseTonescale(float3 JMh, int stage)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
-    float3 tonemappedJMh = JMh;
-    float3 surround      = viewingConditionsToSurround(inputViewingConditions);
-
-    if (!applyTonecurve && !applyChromaCompression)
+    if (!applyTonecurve)
     {
-      // nothing else to do here
-      return tonemappedJMh;
+      return JMh;
     }
-
-    float3 untonemappedColourJMh = tonemappedJMh;
-
-    float luminance = Hellwig_J_to_Y(tonemappedJMh.x, surround, stage);
+    float3 untonemappedColourJMh = JMh;
+    float3 surround      = viewingConditionsToSurround(inputViewingConditions); // TODO: stage?
+    float  luminance     = Hellwig_J_to_Y(untonemappedColourJMh.x, surround, stage);
 
     float linear;
     if (toneScaleMode == 1)
@@ -1251,17 +1245,7 @@ local:
 
     linear = linear * referenceLuminance;
 
-    if (applyTonecurve)
-    {
-      float untonemappedJ   = Y_to_Hellwig_J(linear, surround, stage);
-      untonemappedColourJMh = float3(untonemappedJ, tonemappedJMh.y, tonemappedJMh.z);
-    }
-
-    if (applyChromaCompression)
-    {
-      untonemappedColourJMh.y = chromaCompression(tonemappedJMh, untonemappedColourJMh.x, linear, 1);
-    }
-
+    untonemappedColourJMh.x = Y_to_Hellwig_J(linear, surround, stage);
     return untonemappedColourJMh;
   }
 
@@ -2035,23 +2019,59 @@ local:
     float3 outputXYZ;
     float3 diagnostic;
 
-    if (invert)
+    if (!diagnosticMode)
     {
-      gamutMappedJMh = XYZ_to_JMh(src, outputViewingConditions, HK_mode_out, 2);
-      compressedJMh  = gamutMapper(gamutMappedJMh, 1);
-      tonemappedJMh  = compressedJMh;
-      JMh            = inverseTonescale(tonemappedJMh, 2);
-      diagnostic     = JMh_to_XYZ(JMh, inputViewingConditions, HK_mode_in, 0);
+      if (invert)
+      {
+        gamutMappedJMh = XYZ_to_JMh(src, outputViewingConditions, HK_mode_out, 2);
+        compressedJMh  = gamutMapper(gamutMappedJMh, 1);
+        tonemappedJMh  = inverseTonescale(compressedJMh, 0);
+        JMh            = compressChroma(compressedJMh, tonemappedJMh.x, 1);
+        diagnostic     = JMh_to_XYZ(JMh, inputViewingConditions, HK_mode_in, 0);
+      }
+      else
+      {
+        float3 clamped = clamp_to_AP1(src);
+        JMh            = XYZ_to_JMh(clamped, inputViewingConditions, HK_mode_in, 0);
+        tonemappedJMh  = forwardTonescale(JMh, 0);
+        compressedJMh  = compressChroma(tonemappedJMh, JMh.x, 0);
+        gamutMappedJMh = gamutMapper(compressedJMh, 0);
+        diagnostic     = JMh_to_XYZ(gamutMappedJMh, outputViewingConditions, HK_mode_out, 2);
+      }
     }
     else
     {
-      JMh            = input_XYZ_to_JMh(src);
-      tonemappedJMh  = forwardTonescale(JMh, 0);
-      compressedJMh  = tonemappedJMh;
-      gamutMappedJMh = gamutMapper(compressedJMh, 0);
-      diagnostic     = JMh_to_XYZ(gamutMappedJMh, outputViewingConditions, HK_mode_out, 2);
+      if (diagnosticMode == 1)
+        diagnostic = clamp_to_AP1(src);
+      else if (diagnosticMode == 2)
+        diagnostic = XYZ_to_JMh(src, inputViewingConditions, HK_mode_in, 0);
+      else if (diagnosticMode == 3)
+        diagnostic = forwardTonescale(src, 0);
+      else if (diagnosticMode == 4)
+{
+        tonemappedJMh = forwardTonescale(src, 0);
+        diagnostic    = compressChroma(tonemappedJMh, src.x, 0);
+      }
+      else if (diagnosticMode == 5)
+        diagnostic = gamutMapper(src, 0);
+      else if (diagnosticMode == 6)
+        diagnostic = JMh_to_XYZ(src, outputViewingConditions, HK_mode_out, 2);
+      
+      // Inverse steps
+      else if (diagnosticMode == 11)
+        diagnostic = XYZ_to_JMh(src, outputViewingConditions, HK_mode_out, 2);
+      else if (diagnosticMode == 12)
+        diagnostic = gamutMapper(src, 1);
+      else if (diagnosticMode == 13)
+        diagnostic = inverseTonescale(src, 0);
+      else if (diagnosticMode == 14)
+      {
+        tonemappedJMh = inverseTonescale(src, 0);
+        diagnostic    = compressChroma(src, tonemappedJMh.x, 1);
+      }
+      else if (diagnosticMode == 15)
+        diagnostic = JMh_to_XYZ(src, inputViewingConditions, HK_mode_in, 0);
     }
-
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
 };
