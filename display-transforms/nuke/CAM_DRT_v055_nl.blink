@@ -297,6 +297,27 @@ local:
 
   void define()
   {
+    defineParam(referenceLuminance, "referenceLuminance", 100.0f);
+    defineParam(peakLuminance, "peakLuminance", 100.0f);
+    defineParam(XYZ_w_scaler, "XYZ_w_scaler", 100.0f);
+
+    defineParam(mmScaleFactor, "mmScaleFactor", 100.0f);
+    defineParam(daniele_n, "daniele_n", 100.0f);
+    defineParam(daniele_n_r, "daniele_n_r", 100.0f);
+    defineParam(daniele_g, "daniele_g", 1.15f);
+    defineParam(daniele_c, "daniele_c", 0.18f);
+    defineParam(daniele_c_d, "daniele_c_d", 10.013f);
+    defineParam(daniele_w_g, "daniele_w_g", 0.14f);
+    defineParam(daniele_t_1, "daniele_t_1", 0.04f);
+    defineParam(daniele_r_hit_min, "daniele_r_hit_min", 128.0f);
+    defineParam(daniele_r_hit_max, "daniele_r_hit_max", 896.0f);
+
+    defineParam(L_A, "L_A", 100.0f);
+    defineParam(Y_b, "Y_b", 20.0f);
+
+    defineParam(L_A_out, "L_A_out", 100.0f);
+    defineParam(Y_b_out, "Y_b_out", 20.0f);
+
     defineParam(chroma_compress_fact, "Chroma Compress Factor", 5.0f);
     defineParam(chroma_expand_fact, "Chroma Expansion Factor", 0.78f);
     defineParam(smoothJ, "Smoothing factor cusp J", 0.055f);
