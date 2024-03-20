@@ -198,16 +198,9 @@ local:
   float3x3 CAT_CAT16_INVERSE;
   float3x3 panlrcm;
 
-  float daniele_r_hit;
-  float daniele_m_0;
-  float daniele_m_1;
   float daniele_u;
   float daniele_m;
-  float daniele_w_i;
   float daniele_c_t;
-  float daniele_g_ip;
-  float daniele_g_ipp2;
-  float daniele_w_2;
   float daniele_s_2;
   float daniele_u_2;
   float daniele_m_2;
@@ -298,11 +291,11 @@ local:
   void define()
   {
     defineParam(referenceLuminance, "referenceLuminance", 100.0f);
-    defineParam(peakLuminance, "peakLuminance", 100.0f);
+    defineParam(peakLuminance, "peakLuminance", 100.0f); // Virtual display peak luminance in cd/m^2
     defineParam(XYZ_w_scaler, "XYZ_w_scaler", 100.0f);
 
     defineParam(mmScaleFactor, "mmScaleFactor", 100.0f);
-    defineParam(daniele_n, "daniele_n", 100.0f);
+    defineParam(daniele_n, "daniele_n", 100.0f); // Externally set to the same as peakLuminance
     defineParam(daniele_n_r, "daniele_n_r", 100.0f);
     defineParam(daniele_g, "daniele_g", 1.15f);
     defineParam(daniele_c, "daniele_c", 0.18f);
@@ -795,6 +788,15 @@ local:
   //
   // - Custom primaries
   //
+  inline float J_from_Achromatic(float A, int conditions)
+  {
+    return nl_normalise * pow(A / A_w[conditions], surround[conditions].y * z[conditions]);
+  }
+  inline float Achromatic_from_J(float J, int conditions)
+  {
+    return A_w[conditions] * pow(J / nl_normalise, 1.0f / (surround[conditions].y * z[conditions]));
+  }
+
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
   {
     // # Step 1
@@ -824,11 +826,11 @@ local:
 
     // # Step 7
     // # Computing the correlate of *Lightness* :math:`J`.
-    float J = 100.0f * pow(A / A_w[conditions], surround[conditions].y * z[conditions]);
+    float J = J_from_Achromatic(A, conditions);
 
     // # Step 8
     // # Computing the correlate of *brightness* :math:`Q`.
-    // float Q = (2.0f / float(surround[conditions].y)) * (J / 100.0f) * A_w[conditions];
+    // float Q = (2.0f / float(surround[conditions].y)) * (J / nl_normalise) * A_w[conditions];
 
     // # Step 9
     // # Computing the correlate of *colourfulness* :math:`M`.
@@ -844,7 +846,7 @@ local:
       const float C = 35.0f * M / A_w[conditions];
       // # *Helmholtz–Kohlrausch* Effect Extension.
       J = sqrt(J * J + 66.0f * C); //J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
-      // float Q_HK = (2.0f / surround[conditions].y) * (J / 100.0f) * A_w[conditions];
+      // float Q_HK = (2.0f / surround[conditions].y) * (J / nl_normalise) * A_w[conditions];
     }
 
     if (J == 0.0f)
@@ -866,7 +868,7 @@ local:
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
-    const float A = A_w[conditions] * pow(J / 100.0f, 1.0f / (surround[conditions].y * z[conditions]));
+    const float A = Achromatic_from_J(J, conditions);
 
     // # Computing *P_p_1* to *P_p_2*.
     const float et    = eccentricity_factor(hr);
@@ -894,6 +896,19 @@ local:
     const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
 
     return XYZ;
+  }
+
+  // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
+  inline float Y_to_Hellwig_J(float Y, int stage)
+  {
+    const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
+    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y * z[stage]);
+  }
+
+  inline float Hellwig_J_to_Y(float J, int stage)
+  {
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / (surround[stage].y * z[stage]));
+    return sign(J) * nl_normalise / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: fix me
   }
 
   // retrieve the JM coordinates of the limiting gamut cusp at the hue slice 'h'
@@ -1021,6 +1036,24 @@ local:
     return lerp(lo.y, hi.y, t);
   }
 
+   void precompute_tonescale_constants()
+  {
+    // pre-calculate Daniele Evo constants
+    const float daniele_r_hit  = daniele_r_hit_min + (daniele_r_hit_max - daniele_r_hit_min) * (log(daniele_n / daniele_n_r) / log(10000.0f / 100.0f));
+    const float daniele_m_0    = daniele_n / daniele_n_r;
+    const float daniele_m_1    = 0.5f * (daniele_m_0 + sqrt(daniele_m_0 * (daniele_m_0 + 4.0f * daniele_t_1)));
+    daniele_u                  = pow((daniele_r_hit / daniele_m_1) / ((daniele_r_hit / daniele_m_1) + 1.0f), daniele_g);
+    daniele_m                  = daniele_m_1 / daniele_u;
+    const float daniele_w_i    = log(daniele_n / 100.0f) / log(2.0f);
+    daniele_c_t                = daniele_c_d * (1.0f + daniele_w_i * daniele_w_g) / daniele_n_r;
+    const float daniele_g_ip   = 0.5f * (daniele_c_t + sqrt(daniele_c_t * (daniele_c_t + 4.0f * daniele_t_1)));
+    const float daniele_g_ipp2 = -daniele_m_1 * pow(daniele_g_ip / daniele_m, 1.0f / daniele_g) / (pow(daniele_g_ip / daniele_m, 1.0f / daniele_g) - 1.0f);
+    const float daniele_w_2    = daniele_c / daniele_g_ipp2;
+    daniele_s_2                = daniele_w_2 * daniele_m_1;
+    daniele_u_2                = pow((daniele_r_hit / daniele_m_1) / ((daniele_r_hit / daniele_m_1) + daniele_w_2), daniele_g);
+    daniele_m_2                = daniele_m_1 / daniele_u_2;
+  }
+
   inline float daniele_evo_fwd(float Y)
   {
     Y       = Y / referenceLuminance;
@@ -1032,7 +1065,7 @@ local:
   inline float daniele_evo_rev(float Y)
   {
     Y       = Y / mmScaleFactor;
-    Y       = max(0.0f, min(daniele_n / (daniele_u_2 * daniele_n_r), Y));
+    Y       = max(0.0f, min(daniele_n / (daniele_u_2 * daniele_n_r), Y)); // TODO: precompute?
     float h = (Y + sqrt(Y * (4.0f * daniele_t_1 + Y))) / 2.0f;
     float f = daniele_s_2 / (pow((daniele_m_2 / h), (1.0f / daniele_g)) - 1.0f);
     return f * referenceLuminance;
@@ -1173,18 +1206,6 @@ local:
       luminanceXYZ        = vector_dot(AP1_to_XYZ, luminanceRGB);
     }
     return luminanceXYZ;
-  }
-
-  inline float Y_to_Hellwig_J(float Y, int stage)
-  {
-    const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
-    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y * z[stage]);
-  }
-
-  inline float Hellwig_J_to_Y(float J, int stage)
-  {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / (surround[stage].y * z[stage]));
-    return sign(J) * nl_normalise / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: fix me
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
@@ -1461,20 +1482,7 @@ local:
 
   void init()
   {
-    // pre-calculate Daniele Evo constants
-    daniele_r_hit  = daniele_r_hit_min + (daniele_r_hit_max - daniele_r_hit_min) * (log(daniele_n / daniele_n_r) / log(10000.0f / 100.0f));
-    daniele_m_0    = daniele_n / daniele_n_r;
-    daniele_m_1    = 0.5f * (daniele_m_0 + sqrt(daniele_m_0 * (daniele_m_0 + 4.0f * daniele_t_1)));
-    daniele_u      = pow((daniele_r_hit / daniele_m_1) / ((daniele_r_hit / daniele_m_1) + 1.0f), daniele_g);
-    daniele_m      = daniele_m_1 / daniele_u;
-    daniele_w_i    = log(daniele_n / 100.0f) / log(2.0f);
-    daniele_c_t    = daniele_c_d * (1.0f + daniele_w_i * daniele_w_g) / daniele_n_r;
-    daniele_g_ip   = 0.5f * (daniele_c_t + sqrt(daniele_c_t * (daniele_c_t + 4.0f * daniele_t_1)));
-    daniele_g_ipp2 = -daniele_m_1 * pow(daniele_g_ip / daniele_m, 1.0f / daniele_g) / (pow(daniele_g_ip / daniele_m, 1.0f / daniele_g) - 1.0f);
-    daniele_w_2    = daniele_c / daniele_g_ipp2;
-    daniele_s_2    = daniele_w_2 * daniele_m_1;
-    daniele_u_2    = pow((daniele_r_hit / daniele_m_1) / ((daniele_r_hit / daniele_m_1) + daniele_w_2), daniele_g);
-    daniele_m_2    = daniele_m_1 / daniele_u_2;
+    precompute_tonescale_constants();
 
     // 1.0f / (c * z) // TODO: investigate uses
     model_gamma = 1.0f / (viewingConditionsToSurround(outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
@@ -2053,6 +2061,48 @@ local:
       }
       else if (diagnosticMode == 15)
         diagnostic = JMh_to_XYZ(src, SOURCE_CONDITIONS);
+
+      else if (diagnosticMode == 100)
+      {
+        diagnostic.x = Y_to_Hellwig_J(src.x, SOURCE_CONDITIONS);
+        diagnostic.y = Y_to_Hellwig_J(src.y, SOURCE_CONDITIONS);
+        diagnostic.z = Y_to_Hellwig_J(src.z, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 101)
+      {
+        diagnostic.x = Hellwig_J_to_Y(src.x, SOURCE_CONDITIONS);
+        diagnostic.y = Hellwig_J_to_Y(src.y, SOURCE_CONDITIONS);
+        diagnostic.z = Hellwig_J_to_Y(src.z, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 102)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_forward(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 103)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_inverse(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 104)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_forward_original(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 105)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_inverse_original(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 105)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_forward_wheatley(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 106)
+      {
+        diagnostic = post_adaptation_non_linear_response_compression_inverse_wheatley(src, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 107)
+      {
+        diagnostic = D_RGB[SOURCE_CONDITIONS];
+      }
+      
     }
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
