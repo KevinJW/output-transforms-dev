@@ -270,6 +270,7 @@ local:
   float  A_w[NUMBER_CONDITIONS];
   float  y_to_j_A_w[NUMBER_CONDITIONS];
   float3 surround[NUMBER_CONDITIONS];
+  bool HK_mode[NUMBER_CONDITIONS];
   // Per "stage" precomputed nonlinearity function variables
   float nl_Fl_scaled[NUMBER_CONDITIONS];
   float nl_derivative_scale[NUMBER_CONDITIONS];
@@ -579,7 +580,6 @@ local:
     return post_adaptation_non_linear_response_compression_inverse_original(RGB, stage);
   }
 
-
   // convert HSV cylindrical projection values to RGB
   float3 HSV_to_RGB(float3 HSV)
   {
@@ -695,16 +695,16 @@ local:
 
   // convert XYZ tristimulus values to the CAM J (lightness), M (colorfulness) and h (hue) correlates
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 XYZ_to_JMh(float3 XYZ, bool HK_mode, int stage)
+  inline float3 XYZ_to_JMh(float3 XYZ, int stage)
   {
-    return XYZ_to_Hellwig2022_JMh(XYZ, HK_mode, stage);
+    return XYZ_to_Hellwig2022_JMh(XYZ, stage);
   }
 
   // convert the CAM J (lightness), M (colorfulness) and h (hue) correlates to XYZ tristimulus values
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 JMh_to_XYZ(float3 JMh, bool HK_mode, int stage)
+  inline float3 JMh_to_XYZ(float3 JMh, int stage)
   {
-    return Hellwig2022_JMh_to_XYZ(JMh, HK_mode, stage);
+    return Hellwig2022_JMh_to_XYZ(JMh, stage);
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
@@ -738,14 +738,14 @@ local:
   {
     const float3 luminanceRGB = RGB * peakLuminance;
     const float3 XYZ          = vector_dot(matrix, luminanceRGB);
-    const float3 JMh          = XYZ_to_JMh(XYZ, HK_mode_out, DISPLAY_CONDITIONS); // TODO
+    const float3 JMh          = XYZ_to_JMh(XYZ, DISPLAY_CONDITIONS); // TODO
     return JMh;
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to linear RGB values with the given primaries
   float3 JMh_to_RGB(float3 JMh, const float3x3& matrix)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, HK_mode_out, DISPLAY_CONDITIONS);// TODO
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, DISPLAY_CONDITIONS);// TODO
     float3 luminanceRGB = vector_dot(matrix, luminanceXYZ);
     float3 RGB          = luminanceRGB / peakLuminance;
     return RGB;
@@ -776,7 +776,7 @@ local:
   //
   // - Custom primaries
   //
-  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, bool HK_mode, int stage)
+  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int stage)
   {
     // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
@@ -819,7 +819,7 @@ local:
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * div(M, Q); // possible div by 0
 
-    if (HK_mode)
+    if (HK_mode[stage])
     {
       // # Computing the correlate of *chroma* :math:`C`.
       const float C = 35.0f * M / A_w[stage];
@@ -833,14 +833,14 @@ local:
     return {J, M, h};
   }
 
-  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, bool HK_mode, int stage)
+  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, int stage)
   {
     float       J  = JMh.x;
     const float M  = JMh.y;
     const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
-    if (HK_mode)
+    if (HK_mode[stage])
     {
       const float C = (M * 35.0f) / A_w[stage];
       J             = sqrt(J * J - 66.0f * C); //J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
@@ -1580,8 +1580,8 @@ local:
     b_weights          = float3(1.0f, 1.0f, -2.0f) / 9.0f;
     generate_panlrcm();
 
-    precompute_hellwig(inWhite, inputViewingConditions, L_A, Y_b, discountIlluminant_in, SOURCE_CONDITIONS);
-    precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, DISPLAY_CONDITIONS);
+    precompute_hellwig(inWhite, inputViewingConditions, L_A, Y_b, HK_mode_in, discountIlluminant_in, SOURCE_CONDITIONS);
+    precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, HK_mode_out, discountIlluminant_out, DISPLAY_CONDITIONS);
     initialise_non_linearities();
 
     // calculate the maximum expected J & M values for the given limit gamut
@@ -1616,7 +1616,7 @@ local:
     // Cusp table for limiting gamut
     initialise_cusp_table(limitingGamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit);
 
-    midJ = XYZ_to_JMh(limitWhite * daniele_c_t * mmScaleFactor, HK_mode_out, DISPLAY_CONDITIONS).x;
+    midJ = XYZ_to_JMh(limitWhite * daniele_c_t * mmScaleFactor, DISPLAY_CONDITIONS).x;
 
     initialise_upper_hull_gamma();
     initialise_lower_hull_gamma();
@@ -1636,9 +1636,10 @@ local:
     return 1.48f + sqrt(Y_background / Y_white);
   }
 
-  void precompute_hellwig(float3 referenceWhite, int conditions, float _L_A, float Y_b, bool discountIlluminant, int stage)
+  void precompute_hellwig(float3 referenceWhite, int conditions, float _L_A, float Y_b, bool HK, bool discountIlluminant, int stage)
   {
     surround[stage] = viewingConditionsToSurround(conditions);
+    HK_mode[stage]  = HK;
 
     const float3 XYZ_w_scaled = referenceWhite * XYZ_w_scaler;
 
@@ -1983,20 +1984,20 @@ local:
     {
       if (invert)
       {
-        gamutMappedJMh = XYZ_to_JMh(src, HK_mode_out, DISPLAY_CONDITIONS);
+        gamutMappedJMh = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
         compressedJMh  = gamutMapper(gamutMappedJMh, INVERSE);
         tonemappedJMh  = inverseTonescale(compressedJMh, SOURCE_CONDITIONS);
         JMh            = compressChroma(compressedJMh, tonemappedJMh.x, INVERSE);
-        diagnostic     = JMh_to_XYZ(JMh, HK_mode_in, SOURCE_CONDITIONS);
+        diagnostic     = JMh_to_XYZ(JMh, SOURCE_CONDITIONS);
       }
       else
       {
         float3 clamped = clamp_to_AP1(src);
-        JMh            = XYZ_to_JMh(clamped, HK_mode_in, SOURCE_CONDITIONS);
+        JMh            = XYZ_to_JMh(clamped, SOURCE_CONDITIONS);
         tonemappedJMh  = forwardTonescale(JMh, SOURCE_CONDITIONS);
         compressedJMh  = compressChroma(tonemappedJMh, JMh.x, FORWARDS);
         gamutMappedJMh = gamutMapper(compressedJMh, FORWARDS);
-        diagnostic     = JMh_to_XYZ(gamutMappedJMh, HK_mode_out, DISPLAY_CONDITIONS);
+        diagnostic     = JMh_to_XYZ(gamutMappedJMh, DISPLAY_CONDITIONS);
       }
     }
     else
@@ -2004,7 +2005,7 @@ local:
       if (diagnosticMode == 1)
         diagnostic = clamp_to_AP1(src);
       else if (diagnosticMode == 2)
-        diagnostic = XYZ_to_JMh(src, HK_mode_in, SOURCE_CONDITIONS);
+        diagnostic = XYZ_to_JMh(src, SOURCE_CONDITIONS);
       else if (diagnosticMode == 3)
       {
         diagnostic = forwardTonescale(src, SOURCE_CONDITIONS);
@@ -2017,11 +2018,11 @@ local:
       else if (diagnosticMode == 5)
         diagnostic = gamutMapper(src, FORWARDS);
       else if (diagnosticMode == 6)
-        diagnostic = JMh_to_XYZ(src, HK_mode_out, DISPLAY_CONDITIONS);
+        diagnostic = JMh_to_XYZ(src, DISPLAY_CONDITIONS);
       
       // Inverse steps
       else if (diagnosticMode == 11)
-        diagnostic = XYZ_to_JMh(src, HK_mode_out, DISPLAY_CONDITIONS);
+        diagnostic = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
       else if (diagnosticMode == 12)
         diagnostic = gamutMapper(src, INVERSE);
       else if (diagnosticMode == 13)
@@ -2034,7 +2035,7 @@ local:
         diagnostic    = compressChroma(src, tonemappedJMh.x, INVERSE);
       }
       else if (diagnosticMode == 15)
-        diagnostic = JMh_to_XYZ(src, HK_mode_in, SOURCE_CONDITIONS);
+        diagnostic = JMh_to_XYZ(src, SOURCE_CONDITIONS);
     }
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
