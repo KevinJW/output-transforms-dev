@@ -287,11 +287,11 @@ local:
   float3 b_weights;
 
   // Nonlinearity 'constants'
-  float nl_gamma;
-  float nl_normalise;
-  float nl_scale;
-  float nl_offset;
-  float nl_d_scale;
+#define nl_gamma     0.42f
+#define nl_normalise 100.0f
+#define nl_scale     400.0f
+#define nl_offset    27.13f
+#define nl_d_scale   nl_gamma * nl_scale * nl_offset
 
   float fitWhiteScale;
 
@@ -468,11 +468,11 @@ local:
     newMatrix.setArray(Mdata);
 
     // return forward or inverse matrix
-    if (direction == 0)
+    if (direction == FORWARDS)
     {
       return newMatrix;
     }
-    else if (direction == 1)
+    else if (direction == INVERSE)
     {
       // create inverse matrix
       float3x3 newMatrixInverse = newMatrix.invert();
@@ -482,8 +482,8 @@ local:
 
   float3 post_adaptation_non_linear_response_compression_forward_original(float3 RGB, int stage)
   {
-    const float3 F_L_RGB = float3pow(F_L[stage] / 100.0f * fabs(RGB), 0.42f);
-    const float3 RGB_c   = (400.0f * sign(RGB) * F_L_RGB) / (27.13f + F_L_RGB);
+    const float3 F_L_RGB = float3pow(F_L[stage] / nl_normalise * fabs(RGB), nl_gamma);
+    const float3 RGB_c   = (nl_scale * sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
     return RGB_c;
   }
 
@@ -538,7 +538,7 @@ local:
   float3 post_adaptation_non_linear_response_compression_inverse_original(float3 RGB, int stage)
   {
     const float3 absRGB = fabs(RGB);
-    const float3 RGB_p  = sign(RGB) * 100.0f / F_L[stage] * float3pow((27.13f * absRGB) / (400.0f - absRGB), 1.0f / 0.42f);
+    const float3 RGB_p  = sign(RGB) * nl_normalise / F_L[stage] * float3pow((nl_offset * absRGB) / (nl_scale - absRGB), 1.0f / nl_gamma);
     return RGB_p;
   }
 
@@ -693,16 +693,16 @@ local:
 
   // convert XYZ tristimulus values to the CAM J (lightness), M (colorfulness) and h (hue) correlates
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 XYZ_to_JMh(float3 XYZ, int stage)
+  inline float3 XYZ_to_JMh(float3 XYZ, int conditions)
   {
-    return XYZ_to_Hellwig2022_JMh(XYZ, stage);
+    return XYZ_to_Hellwig2022_JMh(XYZ, conditions);
   }
 
   // convert the CAM J (lightness), M (colorfulness) and h (hue) correlates to XYZ tristimulus values
   // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 JMh_to_XYZ(float3 JMh, int stage)
+  inline float3 JMh_to_XYZ(float3 JMh, int conditions)
   {
-    return Hellwig2022_JMh_to_XYZ(JMh, stage);
+    return Hellwig2022_JMh_to_XYZ(JMh, conditions);
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to  RGB values in the output colorspace
@@ -774,19 +774,19 @@ local:
   //
   // - Custom primaries
   //
-  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int stage)
+  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
   {
     // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
     float3 RGB = vector_dot(CAT_CAT16, XYZ);
 
     // # Step 2
-    float3 RGB_c = D_RGB[stage] * RGB;
+    float3 RGB_c = D_RGB[conditions] * RGB;
 
     // # Step 3
     // # Applying forward post-adaptation non-linear response compression.
 
-    float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c, stage);
+    float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c, conditions);
 
     // # Step 6 and Step 4
     // # Computing achromatic responses for the stimulus.
@@ -803,27 +803,27 @@ local:
 
     // # Step 7
     // # Computing the correlate of *Lightness* :math:`J`.
-    float J = 100.0f * pow(A / A_w[stage], surround[stage].y * z[stage]);
+    float J = 100.0f * pow(A / A_w[conditions], surround[conditions].y * z[conditions]);
 
     // # Step 8
     // # Computing the correlate of *brightness* :math:`Q`.
-    // float Q = (2.0f / float(surround[stage].y)) * (J / 100.0f) * A_w[stage];
+    // float Q = (2.0f / float(surround[conditions].y)) * (J / 100.0f) * A_w[conditions];
 
     // # Step 9
     // # Computing the correlate of *colourfulness* :math:`M`.
     const float et = eccentricity_factor(hr);
-    float       M  = 43.0f * surround[stage].z * et * sqrt(a * a + b * b);
+    float       M  = 43.0f * surround[conditions].z * et * sqrt(a * a + b * b);
 
     // # Computing the correlate of *saturation* :math:`s`.
     // float s = 100.0f * div(M, Q); // possible div by 0
 
-    if (HK_mode[stage])
+    if (HK_mode[conditions])
     {
       // # Computing the correlate of *chroma* :math:`C`.
-      const float C = 35.0f * M / A_w[stage];
+      const float C = 35.0f * M / A_w[conditions];
       // # *Helmholtz–Kohlrausch* Effect Extension.
       J = sqrt(J * J + 66.0f * C); //J + hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f); // TODO: Luke's PhD has updated HK calculation
-      // float Q_HK = (2.0f / surround[stage].y) * (J / 100.0f) * A_w[stage];
+      // float Q_HK = (2.0f / surround[conditions].y) * (J / 100.0f) * A_w[conditions];
     }
 
     if (J == 0.0f)
@@ -831,25 +831,25 @@ local:
     return {J, M, h};
   }
 
-  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, int stage)
+  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, int conditions)
   {
     float       J  = JMh.x;
     const float M  = JMh.y;
     const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
-    if (HK_mode[stage])
+    if (HK_mode[conditions])
     {
-      const float C = (M * 35.0f) / A_w[stage];
+      const float C = (M * 35.0f) / A_w[conditions];
       J             = sqrt(J * J - 66.0f * C); //J - hue_angle_dependency_Hellwig2022(hr) * pow(C, 0.587f);
     }
 
     // # Computing achromatic response :math:`A` for the stimulus.
-    const float A = A_w[stage] * pow(J / 100.0f, 1.0f / (surround[stage].y * z[stage]));
+    const float A = A_w[conditions] * pow(J / 100.0f, 1.0f / (surround[conditions].y * z[conditions]));
 
     // # Computing *P_p_1* to *P_p_2*.
     const float et    = eccentricity_factor(hr);
-    const float P_p_1 = 43.0f * et * surround[stage].z;
+    const float P_p_1 = 43.0f * et * surround[conditions].z;
     const float P_p_2 = A;
 
     // # Step 3
@@ -864,10 +864,10 @@ local:
 
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
-    const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a, stage);
+    const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a, conditions);
 
     // # Step 6
-    const float3 RGB = RGB_c / D_RGB[stage];
+    const float3 RGB = RGB_c / D_RGB[conditions];
 
     // # Step 7
     const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
@@ -1156,17 +1156,17 @@ local:
 
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
-    const float F_L_Y = pow(F_L[stage] * fabs(Y) / 100.0f, 0.42f);
-    return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y * z[stage]);
+    const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
+    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y * z[stage]);
   }
 
   inline float Hellwig_J_to_Y(float J, int stage)
   {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / 100.0f, 1.0f / (surround[stage].y * z[stage]));
-    return sign(J) * 100.0f / F_L[stage] * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / (surround[stage].y * z[stage]));
+    return sign(J) * nl_normalise / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: fix me
   }
 
-  float3 forwardTonescale(float3 inputJMh, int stage)
+  float3 forwardTonescale(float3 inputJMh, int conditions)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     if (!applyTonecurve)
@@ -1174,9 +1174,9 @@ local:
       return inputJMh;
     }
 
-    float  linear        = Hellwig_J_to_Y(inputJMh.x, stage);
+    float  linear        = Hellwig_J_to_Y(inputJMh.x, conditions);
     float  luminanceTS   = daniele_evo_fwd(linear);
-    float  tonemappedJ   = Y_to_Hellwig_J(luminanceTS, stage);
+    float  tonemappedJ   = Y_to_Hellwig_J(luminanceTS, conditions);
     float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
 
     return tonemappedJMh;
@@ -1193,7 +1193,7 @@ local:
     return JMh;
   }
 
-  float3 inverseTonescale(float3 JMh, int stage)
+  float3 inverseTonescale(float3 JMh, int conditions)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     if (!applyTonecurve)
@@ -1202,9 +1202,9 @@ local:
     }
 
     float3 untonemappedColourJMh = JMh;
-    float  luminance     = Hellwig_J_to_Y(untonemappedColourJMh.x, stage);
+    float  luminance     = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
     float linear         = daniele_evo_rev(luminance);
-    untonemappedColourJMh.x = Y_to_Hellwig_J(linear, stage);
+    untonemappedColourJMh.x = Y_to_Hellwig_J(linear, conditions);
 
     return untonemappedColourJMh;
   }
@@ -1668,8 +1668,8 @@ local:
     A_w[stage]          = dot(achromatic_weights, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w
-    const float F_L_W = pow(F_L[stage], 0.42f);
-    y_to_j_A_w[stage]  = (400.0f * F_L_W) / (27.13f + F_L_W);
+    const float F_L_W = pow(F_L[stage], nl_gamma);
+    y_to_j_A_w[stage]  = (nl_scale * F_L_W) / (nl_offset + F_L_W);
   }
 
   void initialise_non_linearity(int stage)
@@ -1694,12 +1694,6 @@ local:
 
   void initialise_non_linearities()
   {
-    nl_gamma     = 0.42f;
-    nl_normalise = 100.0f;
-    nl_scale     = 400.0f;
-    nl_offset    = 27.13f;
-    nl_d_scale   = nl_gamma * nl_scale * nl_offset;
-
     for (int i = 0; i < NUMBER_CONDITIONS; ++i)
     {
       initialise_non_linearity(i);
