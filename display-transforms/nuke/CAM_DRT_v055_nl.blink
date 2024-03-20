@@ -16,11 +16,6 @@ param:
   // 5: P3-DCI
   int primariesIn;
 
-  // Tonescale mode
-  // 0: Linear
-  // 1: Daniele Evo Curve
-  int toneScaleMode;
-
   // Disable Degree of Adaptation
   // This is only effective if the limit primaries have a non-D65 white point
   // since the input conversion is assumed to be fully adapted
@@ -34,7 +29,8 @@ param:
   int  cc_et;
 
   // Reference Luminance in Cd/sqm
-  float referenceLuminance;
+  float referenceLuminance; // TODO: reference only for tonescale curve
+                            // can it be factored in or removed (is it duplicated)
 
   // Viewing Conditions (for output)
   // 0: Dark
@@ -152,7 +148,7 @@ param:
   int diagnosticMode;
 
   // DanieleEvoCurve (ACES2 candidate) parameters
-  float mmScaleFactor;
+  float mmScaleFactor;     // TODO: can we factor this into something? Should be renamed if not.
   float daniele_n;         // peak white
   float daniele_n_r;       // Normalized white in nits (what 1.0 should be)
   float daniele_g;         // surround / contrast
@@ -887,27 +883,6 @@ local:
     return int((high + low) / 2); // Integer division
   }
 
-  int find_upper_hue_in_table(float wrapped_hue, float3* table, int table_size)
-  {
-    int low_i  = 0;
-    int high_i = table_size - 1;
-    int i      = hue_position_in_uniform_table(wrapped_hue, table_size);
-
-    while (low_i + 1 < high_i)
-    {
-      if (wrapped_hue > table[i].z)
-      {
-        low_i = i;
-      }
-      else
-      {
-        high_i = i;
-      }
-      i = midpoint(low_i, high_i);
-    }
-    return high_i;
-  }
-
   float2 limitingCuspFromTable(float wrapped_hue)
   {
     float3 lo;
@@ -1020,19 +995,21 @@ local:
     return lerp(lo.y, hi.y, t);
   }
 
-  float daniele_evo_fwd(float Y)
+  inline float daniele_evo_fwd(float Y)
   {
+    Y       = Y / referenceLuminance;
     float f = daniele_m_2 * pow(max(0.0f, Y) / (Y + daniele_s_2), daniele_g);
     float h = max(0.0f, f * f / (f + daniele_t_1));
-    return h;
+    return h * mmScaleFactor;
   }
 
-  float daniele_evo_rev(float Y)
+  inline float daniele_evo_rev(float Y)
   {
+    Y       = Y / mmScaleFactor;
     Y       = max(0.0f, min(daniele_n / (daniele_u_2 * daniele_n_r), Y));
     float h = (Y + sqrt(Y * (4.0f * daniele_t_1 + Y))) / 2.0f;
     float f = daniele_s_2 / (pow((daniele_m_2 / h), (1.0f / daniele_g)) - 1.0f);
-    return f;
+    return f * referenceLuminance;
   }
 
   // Return compression gamut cusp M scaled with an eccentricity factor
@@ -1172,13 +1149,13 @@ local:
     return luminanceXYZ;
   }
 
-  float Y_to_Hellwig_J(float Y, float3 surround, int stage)
+  inline float Y_to_Hellwig_J(float Y, float3 surround, int stage)
   {
     const float F_L_Y = pow(F_L[stage] * fabs(Y) / 100.0f, 0.42f);
     return sign(Y) * 100.0f * pow(((400.0f * F_L_Y) / (27.13f + F_L_Y)) / y_to_j_A_w[stage], surround.y * z[stage]);
   }
 
-  float Hellwig_J_to_Y(float J, float3 surround, int stage)
+  inline float Hellwig_J_to_Y(float J, float3 surround, int stage)
   {
     const float A = y_to_j_A_w[stage] * pow(fabs(J) / 100.0f, 1.0f / (surround.y * z[stage]));
     return sign(J) * 100.0f / F_L[stage] * pow((27.13f * A) / (400.0f - A), 1.0f / 0.42f); // TODO: fix me
@@ -1192,16 +1169,9 @@ local:
       return inputJMh;
     }
 
-    float3 surround    = viewingConditionsToSurround(conditions);
-    float  linear      = Hellwig_J_to_Y(inputJMh.x, surround, stage) / referenceLuminance;
-    float  luminanceTS = linear;
-
-    // switch for applying the different tonescale compression functions
-    if (toneScaleMode == 1)
-    {
-      luminanceTS = daniele_evo_fwd(luminanceTS) * mmScaleFactor;
-    }
-
+    float3 surround      = viewingConditionsToSurround(conditions);
+    float  linear        = Hellwig_J_to_Y(inputJMh.x, surround, stage);
+    float  luminanceTS   = daniele_evo_fwd(linear);
     float  tonemappedJ   = Y_to_Hellwig_J(luminanceTS, surround, stage);
     float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
 
@@ -1226,23 +1196,13 @@ local:
     {
       return JMh;
     }
+
     float3 untonemappedColourJMh = JMh;
     float3 surround      = viewingConditionsToSurround(conditions);
     float  luminance     = Hellwig_J_to_Y(untonemappedColourJMh.x, surround, stage);
-
-    float linear;
-    if (toneScaleMode == 1)
-    {
-      linear = daniele_evo_rev(luminance / mmScaleFactor);
-    }
-    else
-    {
-      linear = luminance;
-    }
-
-    linear = linear * referenceLuminance;
-
+    float linear         = daniele_evo_rev(luminance);
     untonemappedColourJMh.x = Y_to_Hellwig_J(linear, surround, stage);
+
     return untonemappedColourJMh;
   }
 
@@ -1622,7 +1582,7 @@ local:
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
     // limitJmax (assumed to match limitRGB white)
-    // Note this fails for HK mode as HK will be increased for highly saturated colours above white
+    // BUG: this fails for HK mode as HK will be increased for highly saturated colours above white
     limitJmax = RGB_to_JMh(float3(1.0f), RGB_to_XYZ_limit).x;
 
     // Cusp table for Reach/chroma compression gamut
@@ -1764,7 +1724,7 @@ local:
     copy_table_rotated(tempTableUnsorted, table_size, output_table, minhIndex);
 
     // Add extra entry to wrap
-    output_table[360] = output_table[0];
+    output_table[360]   = output_table[0];
     output_table[360].z = output_table[360].z + 360.0f;
   }
 
