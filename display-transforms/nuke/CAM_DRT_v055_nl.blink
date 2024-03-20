@@ -88,7 +88,7 @@ param:
   // the samples are spaced by HSV hue increments of the limiting RGB gamut
   // so to find the correct entry for a given CAM hue (h) value
   // one must search the table entries for the matching entry.z component
-  int gamutCuspTableSize;
+#define gamutCuspTableSize 360
 
   // Blend Between Compressing towards
   // Target Gamut Cusp Luminance (0.0)
@@ -143,7 +143,10 @@ param:
   //
 
   // Toggle Inverse Transform
+#define FORWARDS 0
+#define INVERSE 1  
   bool invert;
+
   // Diagnostic path modes
   int diagnosticMode;
 
@@ -248,22 +251,38 @@ local:
   float  clamped_smoothness;
   float2 smooth_cusp_scale;
 
-
   // 361 - Adds an extra entry to wrap the hues without branching
   // Non-uniform in h
-  float3 limitingGamutCuspTable[361];
-  float3 cgamutCuspTable[361];
+  float3 limitingGamutCuspTable[gamutCuspTableSize+1];
+  float3 cgamutCuspTable[gamutCuspTableSize+1];
   // Uniform h
-  float3 reachGamutCuspTable[361];
-  float2 gamutGammas[361];
+  float3 reachGamutCuspTable[gamutCuspTableSize+1];
+  float2 gamutGammas[gamutCuspTableSize+1];
 
   // Hellwig 2022 constants
-  float  F_L[2];
-  float  z[2];
-  float3 D_RGB[2];
-  float  A_w[2];
-  float  y_to_j_A_w[2];
-  float3 surround[2];
+#define SOURCE_CONDITIONS 0
+#define DISPLAY_CONDITIONS 1
+#define NUMBER_CONDITIONS 2
+
+  float  F_L[NUMBER_CONDITIONS];
+  float  z[NUMBER_CONDITIONS];
+  float3 D_RGB[NUMBER_CONDITIONS];
+  float  A_w[NUMBER_CONDITIONS];
+  float  y_to_j_A_w[NUMBER_CONDITIONS];
+  float3 surround[NUMBER_CONDITIONS];
+  // Per "stage" precomputed nonlinearity function variables
+  float nl_Fl_scaled[NUMBER_CONDITIONS];
+  float nl_derivative_scale[NUMBER_CONDITIONS];
+  float nl_fql[NUMBER_CONDITIONS];
+  float nl_fqu[NUMBER_CONDITIONS];
+  float nl_lower_slope[NUMBER_CONDITIONS];
+  float nl_upper_slope[NUMBER_CONDITIONS];
+  float nl_a2[NUMBER_CONDITIONS];
+  float nl_a1[NUMBER_CONDITIONS];
+  float nl_a0[NUMBER_CONDITIONS];
+  float nl_b_[NUMBER_CONDITIONS];
+  float nl_average_roots[NUMBER_CONDITIONS];
+
   float3 achromatic_weights;
   float3 a_weights;
   float3 b_weights;
@@ -274,19 +293,6 @@ local:
   float nl_scale;
   float nl_offset;
   float nl_d_scale;
-
-  // Per "stage" precomputed nonlinearity function variables
-  float nl_Fl_scaled[2];
-  float nl_derivative_scale[2];
-  float nl_fql[2];
-  float nl_fqu[2];
-  float nl_lower_slope[2];
-  float nl_upper_slope[2];
-  float nl_a2[2];
-  float nl_a1[2];
-  float nl_a0[2];
-  float nl_b_[2];
-  float nl_average_roots[2];
 
   float fitWhiteScale;
 
@@ -712,7 +718,7 @@ local:
     {
       // Soft clamp by compressing negative display linear values
       float3 compr = float3(clamp_thr, clamp_dist, 1.2f);
-      luminanceRGB = compress_aces(luminanceRGB, compr, compr, compr, 0);
+      luminanceRGB = compress_aces(luminanceRGB, compr, compr, compr, FORWARDS);
     }
 
     if (clampOutput)
@@ -732,14 +738,14 @@ local:
   {
     const float3 luminanceRGB = RGB * peakLuminance;
     const float3 XYZ          = vector_dot(matrix, luminanceRGB);
-    const float3 JMh          = XYZ_to_JMh(XYZ, HK_mode_out, 1); // TODO
+    const float3 JMh          = XYZ_to_JMh(XYZ, HK_mode_out, DISPLAY_CONDITIONS); // TODO
     return JMh;
   }
 
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to linear RGB values with the given primaries
   float3 JMh_to_RGB(float3 JMh, const float3x3& matrix)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, HK_mode_out, 1);// TODO
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, HK_mode_out, DISPLAY_CONDITIONS);// TODO
     float3 luminanceRGB = vector_dot(matrix, luminanceXYZ);
     float3 RGB          = luminanceRGB / peakLuminance;
     return RGB;
@@ -1402,27 +1408,27 @@ local:
   {
     if (which == 0)
     {
-      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, FORWARDS);
     }
     else if (which == 1)
     {
-      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, FORWARDS);
     }
     else if (which == 2)
     {
-      return RGBPrimsToXYZMatrix(float2(0.64f, 0.33f), float2(0.3f, 0.6f), float2(0.15f, 0.06f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.64f, 0.33f), float2(0.3f, 0.6f), float2(0.15f, 0.06f), float2(0.3127f, 0.3290f), 1.0f, FORWARDS);
     }
     else if (which == 3)
     {
-      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, FORWARDS);
     }
     else if (which == 4)
     {
-      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, FORWARDS);
     }
     else if (which == 5)
     {
-      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.314f, 0.351f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.314f, 0.351f), 1.0f, FORWARDS);
     }
     else
     {
@@ -1545,7 +1551,7 @@ local:
       limitBlueForMatrix  = float2(0.0f, 0.0f);
     }
 
-    RGB_to_XYZ_limit = RGBPrimsToXYZMatrix(limitRedForMatrix, limitGreenForMatrix, limitBlueForMatrix, limitWhiteForMatrix, 1.0f, 0);
+    RGB_to_XYZ_limit = RGBPrimsToXYZMatrix(limitRedForMatrix, limitGreenForMatrix, limitBlueForMatrix, limitWhiteForMatrix, 1.0f, FORWARDS);
     XYZ_to_RGB_limit = RGB_to_XYZ_limit.invert();
 
     RGB_to_XYZ_output = generate_RGB_to_XYZ_matrix(primariesOut);
@@ -1565,7 +1571,7 @@ local:
     }
     else if (catDataSelection == 2)
     {
-      CAT_CAT16 = RGBPrimsToXYZMatrix(rxy, gxy, bxy, wxy, 1.0f, 1);
+      CAT_CAT16 = RGBPrimsToXYZMatrix(rxy, gxy, bxy, wxy, 1.0f, INVERSE);
     }
     CAT_CAT16_INVERSE = CAT_CAT16.invert();
 
@@ -1574,8 +1580,8 @@ local:
     b_weights          = float3(1.0f, 1.0f, -2.0f) / 9.0f;
     generate_panlrcm();
 
-    precompute_hellwig(inWhite, inputViewingConditions, L_A, Y_b, discountIlluminant_in, 0);
-    precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, 1);
+    precompute_hellwig(inWhite, inputViewingConditions, L_A, Y_b, discountIlluminant_in, SOURCE_CONDITIONS);
+    precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, discountIlluminant_out, DISPLAY_CONDITIONS);
     initialise_non_linearities();
 
     // calculate the maximum expected J & M values for the given limit gamut
@@ -1588,7 +1594,7 @@ local:
     float3x3 RGB_to_XYZ_cgReach;
     if (ccReach == 0) // Chroma Compression Space (primaries defined in kernel params)
     {
-      RGB_to_XYZ_cgReach = RGBPrimsToXYZMatrix(crxy, cgxy, cbxy, cwxy, 1.0f, 0);
+      RGB_to_XYZ_cgReach = RGBPrimsToXYZMatrix(crxy, cgxy, cbxy, cwxy, 1.0f, FORWARDS);
     }
     else if (ccReach == 1)
     {
@@ -1610,7 +1616,7 @@ local:
     // Cusp table for limiting gamut
     initialise_cusp_table(limitingGamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit);
 
-    midJ = XYZ_to_JMh(limitWhite * daniele_c_t * mmScaleFactor, HK_mode_out, 1).x;
+    midJ = XYZ_to_JMh(limitWhite * daniele_c_t * mmScaleFactor, HK_mode_out, DISPLAY_CONDITIONS).x;
 
     initialise_upper_hull_gamma();
     initialise_lower_hull_gamma();
@@ -1695,7 +1701,7 @@ local:
     nl_offset    = 27.13f;
     nl_d_scale   = nl_gamma * nl_scale * nl_offset;
 
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < NUMBER_CONDITIONS; ++i)
     {
       initialise_non_linearity(i);
     }
@@ -1708,7 +1714,7 @@ local:
     // since it is unlikely that HSV.H=0 and JMh.h=0 line up
     // the entries are then wrap-around shifted
     // so that the 'gamutCuspTable' starts with the lowest JMh.h value
-    float3 tempTableUnsorted[360];
+    float3 tempTableUnsorted[gamutCuspTableSize];
     int    minhIndex = 0;
     for (int i = 0; i < table_size; ++i)
     {
@@ -1723,8 +1729,8 @@ local:
     copy_table_rotated(tempTableUnsorted, table_size, output_table, minhIndex);
 
     // Add extra entry to wrap
-    output_table[360]   = output_table[0];
-    output_table[360].z = output_table[360].z + 360.0f;
+    output_table[gamutCuspTableSize]   = output_table[0];
+    output_table[gamutCuspTableSize].z = output_table[gamutCuspTableSize].z + 360.0f;
   }
 
   void copy_table_rotated(float3 * tableUnsorted, const int tableSize, float3 output_table[], const int offsetIndex)
@@ -1977,20 +1983,20 @@ local:
     {
       if (invert)
       {
-        gamutMappedJMh = XYZ_to_JMh(src, HK_mode_out, 1);
-        compressedJMh  = gamutMapper(gamutMappedJMh, 1);
-        tonemappedJMh  = inverseTonescale(compressedJMh, 0);
-        JMh            = compressChroma(compressedJMh, tonemappedJMh.x, 1);
-        diagnostic     = JMh_to_XYZ(JMh, HK_mode_in, 0);
+        gamutMappedJMh = XYZ_to_JMh(src, HK_mode_out, DISPLAY_CONDITIONS);
+        compressedJMh  = gamutMapper(gamutMappedJMh, INVERSE);
+        tonemappedJMh  = inverseTonescale(compressedJMh, SOURCE_CONDITIONS);
+        JMh            = compressChroma(compressedJMh, tonemappedJMh.x, INVERSE);
+        diagnostic     = JMh_to_XYZ(JMh, HK_mode_in, SOURCE_CONDITIONS);
       }
       else
       {
         float3 clamped = clamp_to_AP1(src);
-        JMh            = XYZ_to_JMh(clamped, HK_mode_in, 0);
-        tonemappedJMh  = forwardTonescale(JMh, 0);
-        compressedJMh  = compressChroma(tonemappedJMh, JMh.x, 0);
-        gamutMappedJMh = gamutMapper(compressedJMh, 0);
-        diagnostic     = JMh_to_XYZ(gamutMappedJMh, HK_mode_out, 1);
+        JMh            = XYZ_to_JMh(clamped, HK_mode_in, SOURCE_CONDITIONS);
+        tonemappedJMh  = forwardTonescale(JMh, SOURCE_CONDITIONS);
+        compressedJMh  = compressChroma(tonemappedJMh, JMh.x, FORWARDS);
+        gamutMappedJMh = gamutMapper(compressedJMh, FORWARDS);
+        diagnostic     = JMh_to_XYZ(gamutMappedJMh, HK_mode_out, DISPLAY_CONDITIONS);
       }
     }
     else
@@ -1998,37 +2004,37 @@ local:
       if (diagnosticMode == 1)
         diagnostic = clamp_to_AP1(src);
       else if (diagnosticMode == 2)
-        diagnostic = XYZ_to_JMh(src, HK_mode_in, 0);
+        diagnostic = XYZ_to_JMh(src, HK_mode_in, SOURCE_CONDITIONS);
       else if (diagnosticMode == 3)
       {
-        diagnostic = forwardTonescale(src, 0);
+        diagnostic = forwardTonescale(src, SOURCE_CONDITIONS);
       }
       else if (diagnosticMode == 4)
       {
-        tonemappedJMh = forwardTonescale(src, 0);
-        diagnostic    = compressChroma(tonemappedJMh, src.x, 0);
+        tonemappedJMh = forwardTonescale(src, SOURCE_CONDITIONS);
+        diagnostic    = compressChroma(tonemappedJMh, src.x, FORWARDS);
       }
       else if (diagnosticMode == 5)
-        diagnostic = gamutMapper(src, 0);
+        diagnostic = gamutMapper(src, FORWARDS);
       else if (diagnosticMode == 6)
-        diagnostic = JMh_to_XYZ(src, HK_mode_out, 1);
+        diagnostic = JMh_to_XYZ(src, HK_mode_out, DISPLAY_CONDITIONS);
       
       // Inverse steps
       else if (diagnosticMode == 11)
-        diagnostic = XYZ_to_JMh(src, HK_mode_out, 1);
+        diagnostic = XYZ_to_JMh(src, HK_mode_out, DISPLAY_CONDITIONS);
       else if (diagnosticMode == 12)
-        diagnostic = gamutMapper(src, 1);
+        diagnostic = gamutMapper(src, INVERSE);
       else if (diagnosticMode == 13)
       {
-        diagnostic = inverseTonescale(src, 0);
+        diagnostic = inverseTonescale(src, SOURCE_CONDITIONS);
       }
       else if (diagnosticMode == 14)
       {
-        diagnostic      = inverseTonescale(src, 0);
-        diagnostic      = compressChroma(src, tonemappedJMh.x, 1);
+        tonemappedJMh = inverseTonescale(src, SOURCE_CONDITIONS);
+        diagnostic    = compressChroma(src, tonemappedJMh.x, INVERSE);
       }
       else if (diagnosticMode == 15)
-        diagnostic = JMh_to_XYZ(src, HK_mode_in, 0);
+        diagnostic = JMh_to_XYZ(src, HK_mode_in, SOURCE_CONDITIONS);
     }
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
   }
