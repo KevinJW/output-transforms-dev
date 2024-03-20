@@ -143,7 +143,7 @@ param:
 
   // Toggle Inverse Transform
 #define FORWARDS false
-#define INVERSE true
+#define INVERSE  true
   bool invert;
 
   // Diagnostic path modes
@@ -251,16 +251,16 @@ local:
 
   // 361 - Adds an extra entry to wrap the hues without branching
   // Non-uniform in h
-  float3 limitingGamutCuspTable[gamutCuspTableSize+1];
-  float3 cgamutCuspTable[gamutCuspTableSize+1];
+  float3 limitingGamutCuspTable[gamutCuspTableSize + 1];
+  float3 cgamutCuspTable[gamutCuspTableSize + 1];
   // Uniform h
-  float3 reachGamutCuspTable[gamutCuspTableSize+1];
-  float2 gamutGammas[gamutCuspTableSize+1];
+  float3 reachGamutCuspTable[gamutCuspTableSize + 1];
+  float2 gamutGammas[gamutCuspTableSize + 1];
 
   // Hellwig 2022 constants
-#define SOURCE_CONDITIONS 0
+#define SOURCE_CONDITIONS  0
 #define DISPLAY_CONDITIONS 1
-#define NUMBER_CONDITIONS 2
+#define NUMBER_CONDITIONS  2
 
   float  F_L[NUMBER_CONDITIONS];
   float  z[NUMBER_CONDITIONS];
@@ -268,7 +268,7 @@ local:
   float  A_w[NUMBER_CONDITIONS];
   float  y_to_j_A_w[NUMBER_CONDITIONS];
   float3 surround[NUMBER_CONDITIONS];
-  bool HK_mode[NUMBER_CONDITIONS];
+  bool   HK_mode[NUMBER_CONDITIONS];
   // Per "stage" precomputed nonlinearity function variables
   float nl_Fl_scaled[NUMBER_CONDITIONS];
   float nl_derivative_scale[NUMBER_CONDITIONS];
@@ -716,7 +716,7 @@ local:
     {
       // Soft clamp by compressing negative display linear values
       float3 softClampParameters = float3(clamp_thr, clamp_dist, 1.2f); // precompute?
-      luminanceRGB = compress_aces(luminanceRGB, softClampParameters, softClampParameters, softClampParameters, FORWARDS);
+      luminanceRGB               = compress_aces(luminanceRGB, softClampParameters, softClampParameters, softClampParameters, FORWARDS);
     }
 
     if (clampOutput)
@@ -743,7 +743,7 @@ local:
   // convert CAM J (lightness), M (colorfulness) and h (hue) correlates to linear RGB values with the given primaries
   float3 JMh_to_RGB(float3 JMh, const float3x3& matrix)
   {
-    float3 luminanceXYZ = JMh_to_XYZ(JMh, DISPLAY_CONDITIONS);// TODO
+    float3 luminanceXYZ = JMh_to_XYZ(JMh, DISPLAY_CONDITIONS); // TODO
     float3 luminanceRGB = vector_dot(matrix, luminanceXYZ);
     float3 RGB          = luminanceRGB / peakLuminance;
     return RGB;
@@ -1145,11 +1145,11 @@ local:
   {
     if (AP1Clamp)
     {
-      float3 luminanceRGB   = vector_dot(XYZ_to_AP1, luminanceXYZ);
-      luminanceRGB.x = max(0.0f, luminanceRGB.x);
-      luminanceRGB.y = max(0.0f, luminanceRGB.y);
-      luminanceRGB.z = max(0.0f, luminanceRGB.z);
-      luminanceXYZ   = vector_dot(AP1_to_XYZ, luminanceRGB);
+      float3 luminanceRGB = vector_dot(XYZ_to_AP1, luminanceXYZ);
+      luminanceRGB.x      = max(0.0f, luminanceRGB.x);
+      luminanceRGB.y      = max(0.0f, luminanceRGB.y);
+      luminanceRGB.z      = max(0.0f, luminanceRGB.z);
+      luminanceXYZ        = vector_dot(AP1_to_XYZ, luminanceRGB);
     }
     return luminanceXYZ;
   }
@@ -1202,9 +1202,9 @@ local:
     }
 
     float3 untonemappedColourJMh = JMh;
-    float  luminance     = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
-    float linear         = daniele_evo_rev(luminance);
-    untonemappedColourJMh.x = Y_to_Hellwig_J(linear, conditions);
+    float  luminance             = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
+    float  linear                = daniele_evo_rev(luminance);
+    untonemappedColourJMh.x      = Y_to_Hellwig_J(linear, conditions);
 
     return untonemappedColourJMh;
   }
@@ -1258,7 +1258,7 @@ local:
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     const float reachMaxM = cReachFromTable(Jmh.z);
-  
+
     float2 JMcusp     = limitingCuspFromTable(Jmh.z);
     float  focusJ     = lerp(JMcusp.x, midJ, min(1.0f, cuspMidBlend - (JMcusp.x / limitJmax)));
     float  slope_gain = compute_slope_gain(Jmh.x, JMcusp.x);
@@ -1406,11 +1406,13 @@ local:
   {
     if (which == 0)
     {
-      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, FORWARDS);
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f,
+                                 FORWARDS);
     }
     else if (which == 1)
     {
-      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, FORWARDS);
+      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f,
+                                 FORWARDS);
     }
     else if (which == 2)
     {
@@ -1418,11 +1420,13 @@ local:
     }
     else if (which == 3)
     {
-      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, FORWARDS);
+      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f,
+                                 FORWARDS);
     }
     else if (which == 4)
     {
-      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, FORWARDS);
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f,
+                                 FORWARDS);
     }
     else if (which == 5)
     {
@@ -1552,7 +1556,7 @@ local:
     RGB_to_XYZ_limit = RGBPrimsToXYZMatrix(limitRedForMatrix, limitGreenForMatrix, limitBlueForMatrix, limitWhiteForMatrix, 1.0f, FORWARDS);
     XYZ_to_RGB_limit = RGB_to_XYZ_limit.invert();
 
-    RGB_to_XYZ_output = generate_RGB_to_XYZ_matrix(primariesOut);
+    RGB_to_XYZ_output          = generate_RGB_to_XYZ_matrix(primariesOut);
     float3x3 XYZ_to_RGB_output = RGB_to_XYZ_output.invert();
 
     float3 white(1.0f, 1.0f, 1.0f);
@@ -1669,7 +1673,7 @@ local:
 
     // Viewing conditions dependent parameters, different to A_w
     const float F_L_W = pow(F_L[stage], nl_gamma);
-    y_to_j_A_w[stage]  = (nl_scale * F_L_W) / (nl_offset + F_L_W);
+    y_to_j_A_w[stage] = (nl_scale * F_L_W) / (nl_offset + F_L_W);
   }
 
   void initialise_non_linearity(int stage)
@@ -1795,7 +1799,7 @@ local:
 
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
+      const float  slope_gain = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
@@ -1886,11 +1890,11 @@ local:
   bool evaluate_lower_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float bottomGamma)
   {
     const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
-    const float focusJ                 = lerp(JMcusp.x, midJ, cuspMidBlend);
+    const float  focusJ                = lerp(JMcusp.x, midJ, cuspMidBlend);
 
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
+      const float  slope_gain = compute_slope_gain(testJmh[testIndex].x, JMcusp.x);
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
@@ -2011,7 +2015,7 @@ local:
         diagnostic = gamutMapper(src, FORWARDS);
       else if (diagnosticMode == 6)
         diagnostic = JMh_to_XYZ(src, DISPLAY_CONDITIONS);
-      
+
       // Inverse steps
       else if (diagnosticMode == 11)
         diagnostic = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
