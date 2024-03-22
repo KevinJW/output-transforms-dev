@@ -187,7 +187,8 @@ param:
   float L_A_out;
   float Y_b_out;
 
-  int   nonlinearity_mode;
+  int2 nonlinearity_mode;
+
   float ql;
   float qu;
   float qz;
@@ -272,6 +273,7 @@ local:
   float nl_upper_slope[NUMBER_CONDITIONS];
   float3 nl_quad[NUMBER_CONDITIONS];
   float2 nl_average_roots[NUMBER_CONDITIONS];
+  int nl_mode [NUMBER_CONDITIONS];
 
 
   float3 achromatic_weights;
@@ -315,7 +317,7 @@ local:
     defineParam(smoothJ, "Smoothing factor cusp J", 0.055f);
     defineParam(smoothM, "Smoothing factor cust M", 0.183f);
 
-    defineParam(nonlinearity_mode, "Non-linearity Mode", 0);
+    defineParam(nonlinearity_mode, "Non-linearity Mode", int2(0, 0));
     defineParam(ql, "Non-linearity Lower Break", 0.26f);
     defineParam(qu, "Non-linearity Upper Break", 150.0f);
     defineParam(qz, "Non-linearity intersection", 0.0f);
@@ -520,7 +522,7 @@ local:
   inline float inverse_quadratic_u(float3 quad, float average_roots, float y)
   {
     const float c = (y + quad.z) / quad.x;
-    const float u_squared = average_roots - c;
+    const float u_squared = average_roots + c;
     return sqrt(u_squared); // ignores complex roots
                             // we know there should be a real solution as we fit through the axes
                             // could add a fabs
@@ -576,8 +578,10 @@ local:
 
   inline float3 post_adaptation_non_linear_response_compression_forward(float3 RGB, int stage)
   {
-    if (nonlinearity_mode == 1)
+    if (nl_mode[stage] == 1)
       return post_adaptation_non_linear_response_compression_forward_wheatley(RGB, stage);
+    else if (nl_mode[stage] == 2)
+      return RGB;
     return post_adaptation_non_linear_response_compression_forward_original(RGB, stage);
   }
 
@@ -619,8 +623,10 @@ local:
 
   inline float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB, int stage)
   {
-    if (nonlinearity_mode == 1)
+    if (nl_mode[stage] == 1)
       return post_adaptation_non_linear_response_compression_inverse_wheatley(RGB, stage);
+    else if (nl_mode[stage] == 2)
+      return RGB;
     return post_adaptation_non_linear_response_compression_inverse_original(RGB, stage);
   }
 
@@ -822,11 +828,11 @@ local:
   //
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return nl_normalise * pow(A / A_w[conditions], surround[conditions].y * z[conditions]);
+    return sign(A) * nl_normalise * pow(fabs(A) / A_w[conditions], surround[conditions].y * z[conditions]);
   }
   inline float Achromatic_from_J(float J, int conditions)
   {
-    return A_w[conditions] * pow(J / nl_normalise, 1.0f / (surround[conditions].y * z[conditions]));
+    return sign(J) * A_w[conditions] * pow(fabs(J) / nl_normalise, 1.0f / (surround[conditions].y * z[conditions]));
   }
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
@@ -940,15 +946,25 @@ local:
   inline float Y_to_Hellwig_J_wheatley(float Y, int stage)
   {
     const float fabsY = fabs(Y);
-    const float A = 3.05f * post_adaptation_non_linear_response_compression_forward_wheatley_f(fabsY / chromatic_adapt_scale[stage], stage);
+    const float A = (1.0f / panlrcm[0][0]) * post_adaptation_non_linear_response_compression_forward_wheatley_f(fabsY / chromatic_adapt_scale[stage], stage);
     return sign(Y) * J_from_Achromatic(A, stage);
+  }
+
+  inline float Y_to_Hellwig_J_linear(float Y, int stage)
+  {
+    const float A = Y / (panlrcm[0][0] * chromatic_adapt_scale[stage]);
+    return J_from_Achromatic(A, stage);
   }
 
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
-    if (nonlinearity_mode == 1)
+    if (nl_mode[stage] == 1)
     {
       return Y_to_Hellwig_J_wheatley(Y, stage);
+    }
+    else if (nl_mode[stage] == 2)
+    {
+      return Y_to_Hellwig_J_linear(Y, stage);
     }
     return Y_to_Hellwig_J_original(Y, stage);
   }
@@ -967,11 +983,20 @@ local:
     return (sign(J) * chromatic_adapt_scale[stage]) * post_adaptation_non_linear_response_compression_inverse_wheatley_f(Aa, stage);
   }
 
+  inline float Hellwig_J_to_Y_linear(float J, int stage)
+  {
+    return  chromatic_adapt_scale[stage] * panlrcm[0][0] * Achromatic_from_J(J, stage);
+  }
+
   inline float Hellwig_J_to_Y(float J, int stage)
   {
-    if (nonlinearity_mode == 1)
+    if (nl_mode[stage] == 1)
     {
       return Hellwig_J_to_Y_wheatley(J, stage);
+    }
+    else if (nl_mode[stage] == 2)
+    {
+      return Hellwig_J_to_Y_linear(J, stage);
     }
     return Hellwig_J_to_Y_original(J, stage);
   }
@@ -1678,8 +1703,10 @@ local:
 
     precompute_hellwig(inWhite, inputViewingConditions, L_A, Y_b, HK_mode_in, discountIlluminant_in, SOURCE_CONDITIONS);
     initialise_non_linearity(SOURCE_CONDITIONS);
+    nl_mode[SOURCE_CONDITIONS] = nonlinearity_mode.x;
     precompute_hellwig(limitWhite, outputViewingConditions, L_A_out, Y_b_out, HK_mode_out, discountIlluminant_out, DISPLAY_CONDITIONS);
     initialise_non_linearity(DISPLAY_CONDITIONS);
+    nl_mode[DISPLAY_CONDITIONS] = nonlinearity_mode.y;
 
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
@@ -1789,7 +1816,7 @@ local:
     const float ql_derivative = post_adaptation_non_linear_response_compression_forward_derivative_wheatley(ql, stage);
 
     // precompute lower Quadratic parameters
-    nl_quad[stage]          = fit_quadratic(float2(ql, nl_fql[stage]), float2(0.0, 0.0), ql_derivative);
+    nl_quad[stage]          = fit_quadratic(float2(ql, nl_fql[stage]), float2(qz, 0.0), ql_derivative);
     nl_average_roots[stage] = precompute_quadratic_average_roots(nl_quad[stage]);
   }
 
@@ -2231,6 +2258,18 @@ local:
         diagnostic.x = Hellwig_J_to_Y_wheatley(src.x, SOURCE_CONDITIONS);
         diagnostic.y = Hellwig_J_to_Y_wheatley(src.y, SOURCE_CONDITIONS);
         diagnostic.z = Hellwig_J_to_Y_wheatley(src.z, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 122)
+      {
+        diagnostic.x = Y_to_Hellwig_J_linear(src.x, SOURCE_CONDITIONS);
+        diagnostic.y = Y_to_Hellwig_J_linear(src.y, SOURCE_CONDITIONS);
+        diagnostic.z = Y_to_Hellwig_J_linear(src.z, SOURCE_CONDITIONS);
+      }
+      else if (diagnosticMode == 123)
+      {
+        diagnostic.x = Hellwig_J_to_Y_linear(src.x, SOURCE_CONDITIONS);
+        diagnostic.y = Hellwig_J_to_Y_linear(src.y, SOURCE_CONDITIONS);
+        diagnostic.z = Hellwig_J_to_Y_linear(src.z, SOURCE_CONDITIONS);
       }
     }
     dst() = float4(diagnostic.x, diagnostic.y, diagnostic.z, source.w);
