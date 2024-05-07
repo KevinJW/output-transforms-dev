@@ -1,0 +1,309 @@
+kernel ACES_DRT_Encoding_Kernel : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image
+  Image<eWrite>                            dst; // the output image
+
+param:
+  //
+  // Input Parameters
+  //
+  bool invert;
+
+  // Encoding of the Input Image
+  // 0: Linear
+  // 1: ACEScct
+  // 2: sRGB
+  // 3: BT.1886 (Gamma 2.4)
+  // 4: Gamma 2.6
+  // 5: ST2084
+  int encoding;
+
+  // Primaries of the Input Image
+  // 0: AP0-ACES
+  // 1: AP1-ACES
+  // 2: sRGB/Rec.709-D65
+  // 3: Rec.2020-D65
+  // 4: P3-D65
+  // 5: P3-DCI
+  // 6: XYZ
+  int primaries;
+
+  // Reference Luminance in Cd/sqm
+  float referenceLuminance;
+
+local:
+  // ST2084 vars
+  float3 st2084_m_1;
+  float3 st2084_m_2;
+  float3 st2084_c_1;
+  float3 st2084_c_2;
+  float3 st2084_c_3;
+  float3 st2084_m_1_d;
+  float3 st2084_m_2_d;
+  float3 st2084_L_p;
+
+  float3x3 XYZ_to_RGB;
+  float3x3 RGB_to_XYZ;
+  float3x3 identity_matrix;
+
+  void define()
+  {
+    defineParam(invert, "Direction", false);
+    defineParam(encoding, "Encoding", 0);
+    defineParam(primaries, "Primaries", 0);
+    defineParam(referenceLuminance, "Reference Luminance", 100.0f);
+  }
+
+  float3x3 RGBPrimsToXYZMatrix(float2 rxy, float2 gxy, float2 bxy, float2 wxy, float Y, bool direction)
+  {
+    // # given r g b chromaticities and whitepoint, convert RGB colors to XYZ
+    // # based on CtlColorSpace.cpp from the CTL source code : 77
+    // # param: xy - dict of chromaticity xy coordinates: rxy: float2(x, y) etc
+    // # param: Y - luminance of "white" - defaults to 1.0
+    // # param: inverse - calculate XYZ to RGB instead
+
+    float2 r = rxy;
+    float2 g = gxy;
+    float2 b = bxy;
+    float2 w = wxy;
+
+    float X = w.x * Y / w.y;
+    float Z = (1 - w.x - w.y) * Y / w.y;
+
+    // # Scale factors for matrix rows
+    float d = r.x * (b.y - g.y) + b.x * (g.y - r.y) + g.x * (r.y - b.y);
+
+    // clang-format off
+    float Sr =    (X * (b.y - g.y) -      \
+            g.x * (Y * (b.y - 1.0f) +  \
+            b.y * (X + Z)) +       \
+            b.x * (Y * (g.y - 1.0f) + \
+            g.y * (X + Z))) / d ;
+
+    float Sg =    (X * (r.y - b.y) +      \
+            r.x * (Y * (b.y - 1.0f) +  \
+            b.y * (X + Z)) -        \
+            b.x * (Y * (r.y - 1.0f) +  \
+            r.y * (X + Z))) / d ;
+
+    float Sb =    (X * (g.y - r.y) -      \
+            r.x * (Y * (g.y - 1.0f) +  \
+            g.y * (X + Z)) +        \
+            g.x * (Y * (r.y - 1.0f) +  \
+            r.y * (X + Z))) / d ;
+
+    // # Assemble the matrix
+    float Mdata[] =
+    {
+      Sr * r.x, Sg * g.x, Sb * b.x,
+      Sr * r.y, Sg * g.y, Sb * b.y,
+      Sr * (1.0f - r.x - r.y), Sg * (1.0f - g.x - g.y), Sb * (1.0f - b.x - b.y),
+    };
+    // clang-format on
+
+    float3x3 newMatrix;
+    newMatrix.setArray(Mdata);
+
+    // return forward or inverse matrix
+    if (direction == 0)
+    {
+      return newMatrix;
+    }
+    else if (direction == 1)
+    {
+      // create inverse matrix
+      float3x3 newMatrixInverse = newMatrix.invert();
+      return newMatrixInverse;
+    }
+  }
+
+  float3x3 generate_RGB_to_XYZ_matrix(const int which)
+  {
+    if (which == 0)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, 0);
+    }
+    else if (which == 1)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, 0);
+    }
+    else if (which == 2)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.64f, 0.33f), float2(0.3f, 0.6f), float2(0.15f, 0.06f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 3)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 4)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 5)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.314f, 0.351f), 1.0f, 0);
+    }
+    else
+    {
+      return identity_matrix;
+    }
+  }
+
+  void init()
+  {
+    st2084_m_1   = 2610.0f / 4096.0f * (1.0f / 4.0f);
+    st2084_m_2   = 2523.0f / 4096.0f * 128.0f;
+    st2084_c_1   = 3424.0f / 4096.0f;
+    st2084_c_2   = 2413.0f / 4096.0f * 32.0f;
+    st2084_c_3   = 2392.0f / 4096.0f * 32.0f;
+    st2084_m_1_d = 1.0f / st2084_m_1;
+    st2084_m_2_d = 1.0f / st2084_m_2;
+    st2084_L_p   = 100.0f; // Scale so 100 is 1.0f for Nuke
+
+    float identity_matrix_data[] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    identity_matrix.setArray(identity_matrix_data);
+
+    RGB_to_XYZ = generate_RGB_to_XYZ_matrix(primaries);
+    XYZ_to_RGB = RGB_to_XYZ.invert();
+  }
+
+  float sRGB_to_linear(float v)
+  {
+    return v < 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);
+  }
+
+  float3 sRGB_to_linear3(float3 v)
+  {
+    return float3{sRGB_to_linear(v.x), sRGB_to_linear(v.y), sRGB_to_linear(v.z)};
+  }
+
+  float linear_to_sRGB(float v)
+  {
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * (pow(v, 1.0f / 2.4f)) - 0.055f;
+  }
+
+  float3 linear_to_sRGB3(float3 v)
+  {
+    return float3{linear_to_sRGB(v.x), linear_to_sRGB(v.y), linear_to_sRGB(v.z)};
+  }
+
+  float ACEScct_to_linear(float v)
+  {
+    return v > 0.155251141552511f ? pow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;
+  }
+
+  float3 ACEScct_to_linear3(float3 v)
+  {
+    return float3{ACEScct_to_linear(v.x), ACEScct_to_linear(v.y), ACEScct_to_linear(v.z)};
+  }
+
+  float linear_to_ACEScct(float v)
+  {
+    return v > 0.0078125f ? (log2(v) + 9.72f) / 17.52f : 10.5402377416545f * v + 0.0729055341958355f;
+  }
+
+  float3 linear_to_ACEScct3(float3 v)
+  {
+    return float3{linear_to_ACEScct(v.x), linear_to_ACEScct(v.y), linear_to_ACEScct(v.z)};
+  }
+
+  float3 ST2084_to_linear(float3 v)
+  {
+    float3 V_p = pow(v, st2084_m_2_d);
+    return pow((max(float3{0.0f, 0.0f, 0.0f}, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;
+  }
+
+  float3 linear_to_ST2084(float3 v)
+  {
+    float3 Y_p = pow(max(float3{0.0f, 0.0f, 0.0f}, v) / st2084_L_p, st2084_m_1);
+    return pow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);
+  }
+
+  float3 encodingToLuminance(int encoding, float3 v)
+  {
+    if (encoding == 1)
+    {
+      v = ACEScct_to_linear3(v);
+    }
+    else if (encoding == 2)
+    {
+      v = sRGB_to_linear3(v);
+    }
+    else if (encoding == 3)
+    {
+      v = pow(v, float3{2.4f, 2.4f, 2.4f});
+    }
+    else if (encoding == 4)
+    {
+      v = pow(v, float3{2.6f, 2.6f, 2.6f});
+    }
+    else if (encoding == 5)
+    {
+      v = ST2084_to_linear(v);
+    }
+
+    // default Linear scaling to our reference Luminace
+    return v * referenceLuminance;
+  }
+
+  float3 luminanceToEncoding(int encoding, float3 v)
+  {
+    v = v / referenceLuminance;
+
+    if (encoding == 1)
+    {
+      return linear_to_ACEScct3(v);
+    }
+    else if (encoding == 2)
+    {
+      return linear_to_sRGB3(v);
+    }
+    else if (encoding == 3)
+    {
+      return pow(v, float3{1.0f / 2.4f, 1.0f / 2.4f, 1.0f / 2.4f});
+    }
+    else if (encoding == 4)
+    {
+      return pow(v, float3{1.0f / 2.6f, 1.0f / 2.6f, 1.0f / 2.6f});
+    }
+    else if (encoding == 5)
+    {
+      return linear_to_ST2084(v);
+    }
+
+    // default Linear scaling to our reference Luminace
+    return v;
+  }
+
+  // multiplies a 3D vector with a 3x3 matrix
+  float3 vector_dot(float3x3 m, float3 v)
+  {
+    float3 r;
+    for (int c = 0; c < 3; c++)
+    {
+      r[c] = m[c][0] * v.x + m[c][1] * v.y + m[c][2] * v.z;
+    }
+
+    return r;
+  }
+
+  void process()
+  {
+    SampleType(src) source = src();
+    float3 input(source.x, source.y, source.z);
+    float3 RGB;
+    float3 out;
+
+    if (invert)
+    {
+      RGB = vector_dot(XYZ_to_RGB, input);
+      out = luminanceToEncoding(encoding, RGB);
+    }
+    else
+    {
+      RGB = encodingToLuminance(encoding, input);
+      out = vector_dot(RGB_to_XYZ, RGB);
+    }
+    dst() = float4(out.x, out.y, out.z, source.w);
+  }
+};
