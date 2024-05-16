@@ -175,7 +175,7 @@ local:
   float _focusDist;
   float _midJ;
   float _limitJmax;
-  float _model_gamma;
+  float _model_gamma; // TODO: investigate uses of this
 
   // Chroma compression pre-calculated constants
   float _compr;   // Compression TODO rename
@@ -677,11 +677,12 @@ local:
     // variables that get set as we iterate through, once all are set to true we break the loop
     const int   test_count                = 3;
     const float testPositions[test_count] = {0.01f, 0.5f, 0.99f};
+    const float fixed_gamma = 1.0f / upperHullGamma;
     for (int i = 0; i < gamutCuspTableSize; ++i)
     {
       if (disableUpperHullGamma)
       {
-        limitingGamutGammas[i].x = 1.0f / upperHullGamma;
+        limitingGamutGammas[i].x = fixed_gamma;
         continue;
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
@@ -770,12 +771,12 @@ local:
     // Same process, for the bottom hull gamma
     const int   test_count                = 3;
     const float testPositions[test_count] = {0.01f, 0.4f, 0.75f};
-
+    const float fixed_gamma = 1.0f / lowerHullGamma;
     for (int i = 0; i < gamutCuspTableSize; ++i)
     {
       if (disableLowerHullGamma)
       {
-        limitingGamutGammas[i].y = 1.0f / lowerHullGamma;
+        limitingGamutGammas[i].y = fixed_gamma;
         continue;
       }
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
@@ -1515,8 +1516,8 @@ local:
   // ACES Tonescale function, proposed by Daniele Siragusano
   inline float aces_ts_fwd(float Y)
   {
-    Y       = Y / referenceLuminance;
-    float f = aces_ts_m_2 * pow(max(0.0f, Y) / (Y + aces_ts_s_2), aces_ts_g);
+    Y       = max(0.0f, Y / referenceLuminance); // TODO: we rescale and scale on input and output could this be better
+    float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
     float h = max(0.0f, f * f / (f + aces_ts_t_1));
     return h * aces_ts_n;
   }
@@ -1543,7 +1544,7 @@ local:
     return sign(J) * nl_normalise / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: fix me
   }
 
-  float3 forwardTonescale(float3 inputJMh, int conditions)
+  float3 forwardTonescale(float3 inputJMh, int conditions) // TODO: switch float3 to single channel?
   {
     float  linear        = Hellwig_J_to_Y(inputJMh.x, conditions);
     float  luminanceTS   = aces_ts_fwd(linear);
@@ -1571,7 +1572,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     if (x > limit)
       return x;
 
-    k2       = max(k2, 0.001f); // TODO; majic constant
+    k2       = max(k2, 0.001f); // TODO; magic constant
     k1       = sqrt(k1 * k1 + k2 * k2);
     float k3 = (limit + k1) / (limit + k2);
 
@@ -1615,7 +1616,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
       // increases saturation in the shadows and mid-tones but not in the highlights.
       // The 0.001 offset starts the expansions slightly above zero.  The sat_thr makes
       // the toe less aggressive near black to reduce the expansion of noise.
-      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 0);
+      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 0); // TODO; magic constant
 
       // Compress the colorfulness.  The goal is to compress less saturated colors more and
       // more saturated colors less, especially in the highlights.  This step creates the
@@ -1630,7 +1631,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     {
       M /= Mnorm;
       M = toe(M, limit, nJ * compr, snJ, 1);
-      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 1);
+      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), 1); // TODO; magic constant
       M *= Mnorm;
       M *= pow(JMh.x / origJ, -model_gamma);
     }
@@ -1638,10 +1639,10 @@ float3 inverseTonescale(float3 JMh, int conditions)
     return M;
   }
 
-  float3 compressChroma(float3 JMh, float originalJ, bool inverse)
+  inline float3 compressChroma(float3 JMh, float originalJ, bool inverse)
   {
     JMh.y = chromaCompression(JMh, originalJ, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
-    if (inverse)
+    if (inverse) // TODO: should this be in the chromaCompression function
       JMh.x = originalJ;
     return JMh;
   }
