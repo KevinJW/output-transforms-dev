@@ -72,6 +72,9 @@ param:
 #define DEBUG_limitingGamutGammas 52
 #define DEBUG_reachGamutCuspTable 53
 
+#define DEBUG_Jconstants 60
+#define DEBUG_FocusConstants 61
+
 #endif
 
   int diagnosticMode;
@@ -517,7 +520,7 @@ local:
     // these are used as limiting values for the gamut boundary searches
     // limitJmax (assumed to match limitRGB white)
     // BUG: this fails for HK mode as HK will be increased for highly saturated colours above white
-    _limitJmax = display_linear_RGB_to_JMh(float3(_peakLuminance), RGB_to_XYZ_limit).x;
+    _limitJmax = linear_RGB_to_JMh(float3(_peakLuminance), RGB_to_XYZ_limit, DISPLAY_CONDITIONS).x;
     _model_gamma = 1.0f / (viewingConditionsToSurround(_outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
   }
 
@@ -553,7 +556,7 @@ local:
     return RGB;
   }
 
-  void initialise_cusp_table(float3 * output_table, const int table_size, const float3x3& matrix, const float luminance)
+  void initialise_cusp_table(float3 * output_table, const int table_size, const float3x3& matrix, const float luminance, const int conditions)
   {
     // the 'tempTableUnsorted' table is populated
     // in increments of H of the limiting gamut HSV space starting at H=0.0
@@ -566,7 +569,7 @@ local:
     {
       const float  hNorm   = float(i) / (table_size);
       const float3 RGB     = HSV_to_RGB(float3(hNorm, 1.0f, 1.0f)) * float3(luminance);
-      tempTableUnsorted[i] = display_linear_RGB_to_JMh(RGB, matrix);
+      tempTableUnsorted[i] = linear_RGB_to_JMh(RGB, matrix, conditions);
       if (tempTableUnsorted[i].z < tempTableUnsorted[minhIndex].z)
       {
         minhIndex = i;
@@ -587,7 +590,7 @@ local:
     }
   }
 
-  void initialise_reach_cusp_table(float3 * output_table, const int table_size, const float limitJ, const float3x3& matrix)
+  void initialise_reach_cusp_table(float3 * output_table, const int table_size, const float limitJ, const float3x3& matrix, const int conditions)
   {
     const float search_range = 100.0;
     for (int i = 0; i < table_size; ++i)
@@ -600,7 +603,7 @@ local:
 
       while (!outside && high < 1400.0)
       {
-        outside = any_below_zero(JMh_to_display_linear_RGB(float3(limitJ, high, hue), matrix));
+        outside = any_below_zero(JMh_to_linear_RGB(float3(limitJ, high, hue), matrix, conditions));
         if (!outside)
         {
           low  = high;
@@ -611,7 +614,7 @@ local:
       while ((high - low) > 1e-2)
       {
         const float sampleM = (high + low) / 2.0;
-        outside             = any_below_zero(JMh_to_display_linear_RGB(float3(limitJ, sampleM, hue), matrix));
+        outside             = any_below_zero(JMh_to_linear_RGB(float3(limitJ, sampleM, hue), matrix, conditions));
         if (outside)
         {
           high = sampleM;
@@ -643,7 +646,8 @@ local:
 
   bool evaluate_upper_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float topGamma,
                                      const float midJ, const float cuspMidBlend, const float limitJmax,
-                                     const float focusDist, const float focusGainBlend, const float focusAdjustGain)
+                                     const float focusDist, const float focusGainBlend, const float focusAdjustGain,
+                                     const float luminance, const int conditions)
   {
     const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
     const float  focusJ                = compute_focusJ(JMcusp, midJ, cuspMidBlend, limitJmax);
@@ -654,7 +658,7 @@ local:
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
-      const float3 newLimitRGB     = JMh_to_display_linear_RGB(approximate_JMh, XYZ_to_RGB_limit);
+      const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions) * luminance;
 
       if (!outside_hull(newLimitRGB))
       {
@@ -665,7 +669,8 @@ local:
   }
 
   void initialise_upper_hull_gamma(const float midJ, const float cuspMidBlend, const float limitJmax,
-                                   const float focusDist, const float focusGainBlend, const float focusAdjustGain)
+                                   const float focusDist, const float focusGainBlend, const float focusAdjustGain,
+                                   const float luminance, const int conditions)
   {
     // Find upper hull gamma values for the gamut mapper
     // start by taking a h angle
@@ -704,7 +709,9 @@ local:
       while (!all_inside && high < 5.0)
       {
         all_inside = evaluate_upper_hull_gamma_fit(JMcusp, testJmh, test_count, high,
-                                                    midJ, cuspMidBlend, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
+                                                    midJ, cuspMidBlend, limitJmax,
+                                                    focusDist, focusGainBlend, focusAdjustGain,
+                                                    luminance, conditions);
         if (!all_inside)
         {
           low  = high;
@@ -717,7 +724,9 @@ local:
       {
         testGamma  = (high + low) / 2.0;
         all_inside = evaluate_upper_hull_gamma_fit(JMcusp, testJmh, test_count, testGamma,
-                                                   midJ, cuspMidBlend, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
+                                                   midJ, cuspMidBlend, limitJmax,
+                                                   focusDist, focusGainBlend, focusAdjustGain,
+                                                   luminance, conditions);
         if (all_inside)
         {
           high = testGamma;
@@ -744,7 +753,8 @@ local:
 
   bool evaluate_lower_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float bottomGamma,
                                      const float midJ, const float cuspMidBlend, const float limitJmax,
-                                     const float focusDist, const float focusGainBlend, const float focusAdjustGain)
+                                     const float focusDist, const float focusGainBlend, const float focusAdjustGain,
+                                     const float luminance, const int conditions)
   {
     const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
     const float  focusJ                = lerp(JMcusp.x, midJ, cuspMidBlend); // TODO: different
@@ -755,7 +765,7 @@ local:
       const float3 approxLimit =
         findGamutBoundaryIntersection(testJmh[testIndex], JMcusp, focusJ, limitJmax, slope_gain, clamped_smoothness, estimated_hull_gammas);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
-      const float3 newLimitRGB     = JMh_to_display_linear_RGB(approximate_JMh, XYZ_to_RGB_limit);
+      const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions) * luminance;
 
       if (!any_below_zero(newLimitRGB))
       {
@@ -766,7 +776,8 @@ local:
   }
 
   void initialise_lower_hull_gamma(const float midJ, const float cuspMidBlend, const float limitJmax,
-                                   const float focusDist, const float focusGainBlend, const float focusAdjustGain)
+                                   const float focusDist, const float focusGainBlend, const float focusAdjustGain,
+                                   const float luminance, const int conditions)
   {
     // Same process, for the bottom hull gamma
     const int   test_count                = 3;
@@ -797,7 +808,9 @@ local:
       while (!all_inside && high < 5.0)
       {
         all_inside = evaluate_lower_hull_gamma_fit(JMcusp, testJmh, test_count, high,
-                                                   midJ, cuspMidBlend, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
+                                                   midJ, cuspMidBlend, limitJmax,
+                                                   focusDist, focusGainBlend, focusAdjustGain,
+                                                   luminance, conditions);
         if (!all_inside)
         {
           low  = high;
@@ -810,7 +823,9 @@ local:
       {
         testGamma  = (high + low) / 2.0;
         all_inside = evaluate_lower_hull_gamma_fit(JMcusp, testJmh, test_count, testGamma,
-                                                   midJ, cuspMidBlend, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
+                                                   midJ, cuspMidBlend, limitJmax,
+                                                   focusDist, focusGainBlend, focusAdjustGain,
+                                                   luminance, conditions);
         if (all_inside)
         {
           high = testGamma;
@@ -889,11 +904,11 @@ local:
     init_chroma_compression(log_peak);
     init_gamut_mapper(log_peak);
 
-    initialise_cusp_table(cgamutCuspTable, gamutCuspTableSize, AP1_to_XYZ, _peakLuminance); // TODO: Does peakLuminance make sense?
-    initialise_reach_cusp_table(reachGamutCuspTable, gamutCuspTableSize, _limitJmax, XYZ_to_AP1);
-    initialise_cusp_table(limitingGamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit, _peakLuminance);
-    initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain);
-    initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain);
+    initialise_cusp_table(cgamutCuspTable, gamutCuspTableSize, AP1_to_XYZ, _peakLuminance, SOURCE_CONDITIONS); // TODO: Does peakLuminance make sense?
+    initialise_reach_cusp_table(reachGamutCuspTable, gamutCuspTableSize, _limitJmax, XYZ_to_AP1, DISPLAY_CONDITIONS); // TODO: is the reach gamut supposed to be DISPLAY?
+    initialise_cusp_table(limitingGamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
+    initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+    initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
   }
 
   // convert radians to degrees
@@ -1480,16 +1495,16 @@ local:
   }
 
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
-  float3 display_linear_RGB_to_JMh(const float3 RGB, const float3x3& matrix)
+  float3 linear_RGB_to_JMh(const float3 RGB, const float3x3& matrix, int conditions)
   {
     const float3 XYZ = vector_dot(matrix, RGB);
-    const float3 JMh = XYZ_to_JMh(XYZ, DISPLAY_CONDITIONS); // TODO
+    const float3 JMh = XYZ_to_JMh(XYZ, conditions);
     return JMh;
   }
 
-  float3 JMh_to_display_linear_RGB(float3 JMh, const float3x3& matrix)
+  float3 JMh_to_linear_RGB(float3 JMh, const float3x3& matrix, int conditions)
   {
-    const float3 XYZ = JMh_to_XYZ(JMh, DISPLAY_CONDITIONS); // TODO
+    const float3 XYZ = JMh_to_XYZ(JMh, conditions);
     const float3 RGB = vector_dot(matrix, XYZ);
     return RGB;
   }
@@ -1752,6 +1767,15 @@ float3 inverseTonescale(float3 JMh, int conditions)
         float reachM = cReachFromTable(src.z);
         output = float3(reachM, src.y, src.z);
     }
+    else if (DEBUG_Jconstants == diagnosticMode)
+    {
+        output = float3(_midJ, _limitJmax, _focusDist);
+    }
+    else if (DEBUG_FocusConstants == diagnosticMode)
+    {
+        output = float3(_cuspMidBlend, _focusGainBlend, _focusAdjustGain);
+    }
+    
     else
     {
         output = src;
