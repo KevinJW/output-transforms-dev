@@ -143,6 +143,9 @@ local:
   float3x3 XYZ_to_RGB_limit;
   float3x3 RGB_to_XYZ_limit;
 
+  // Reference Luminance in Cd/sqm
+#define referenceLuminance 100.0f
+
   // Model Nonlinearity 'constants'
 #define nl_gamma     0.42f
 #define nl_normalise 100.0f
@@ -192,11 +195,8 @@ local:
   float aces_ts_s_2;
   float aces_ts_u_2;
   float aces_ts_m_2;
+  float aces_ts_inv_upper_limit;
 
-  // Reference Luminance in Cd/sqm
-  float referenceLuminance; // TODO: reference only for tonescale curve
-                            // can it be factored in or removed (is it duplicated)
- 
   void define()
   {
     defineParam(invert, "Invert", FORWARDS);
@@ -894,8 +894,6 @@ local:
 
   void init()
   {
-    referenceLuminance = 100.0f;
-
     init_tonescale_constants(_peakLuminance);
 
     const float log_peak = log10(aces_ts_n / aces_ts_n_r);
@@ -1436,7 +1434,7 @@ local:
     // Compress the out of gamut color along the projection line
     float v      = project_from.y / ganutBoundary.y;
     v            = compressPowerP(v, threshold, difference, _compressionFuncParams.w, direction);
-    float2 JMcompressed = project_to + v * (ganutBoundary - project_to);
+    const float2 JMcompressed = project_to + v * (ganutBoundary - project_to);
     return float3(JMcompressed.x, JMcompressed.y, JMh.z);
   }
 
@@ -1516,11 +1514,13 @@ local:
     aces_ts_s_2                = aces_ts_w_2 * aces_ts_m_1;
     aces_ts_u_2                = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + aces_ts_w_2), aces_ts_g);
     aces_ts_m_2                = aces_ts_m_1 / aces_ts_u_2;
+    aces_ts_inv_upper_limit    = aces_ts_n / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name
   }
 
   // ACES Tonescale function, proposed by Daniele Siragusano
   inline float aces_ts_fwd(float Y)
   {
+    // removed referenceLuminance scalar as long as it matches nl_normalise
     Y       = max(0.0f, Y / referenceLuminance); // TODO: we rescale and scale on input and output could this be better
     float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
     float h = max(0.0f, f * f / (f + aces_ts_t_1));
@@ -1530,7 +1530,7 @@ local:
   inline float aces_ts_rev(float Y)
   {
     Y       = Y / aces_ts_n;
-    Y       = max(0.0f, min(aces_ts_n / (aces_ts_u_2 * aces_ts_n_r), Y)); // TODO: precompute?
+    Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit);
     float h = (Y + sqrt(Y * (4.0f * aces_ts_t_1 + Y))) / 2.0f;
     float f = aces_ts_s_2 / (pow((aces_ts_m_2 / h), (1.0f / aces_ts_g)) - 1.0f);
     return f * referenceLuminance;
@@ -1546,7 +1546,7 @@ local:
   inline float Hellwig_J_to_Y(float J, int stage)
   {
     const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / (surround[stage].y * z[stage]));
-    return sign(J) * nl_normalise / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: fix me
+    return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions) // TODO: switch float3 to single channel?
@@ -1559,7 +1559,7 @@ local:
     return tonemappedJMh;
   }
 
-float3 inverseTonescale(float3 JMh, int conditions)
+float3 inverseTonescale(float3 JMh, int conditions) // TODO: switch float3 to single channel?
   {
     float3 untonemappedColourJMh = JMh;
     float  luminance             = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
@@ -1601,10 +1601,10 @@ float3 inverseTonescale(float3 JMh, int conditions)
     if (M == 0.0f)
       return M;
 
-    float nJ    = JMh.x / limitJmax;
-    float snJ   = max(0.0f, 1.0f - nJ);
-    float Mnorm = ccuspFromTable(JMh.z).y;
-    float limit = pow(nJ, model_gamma) * cReachFromTable(JMh.z) / Mnorm;
+    const float nJ    = JMh.x / limitJmax;
+    const float snJ   = max(0.0f, 1.0f - nJ);
+    const float Mnorm = ccuspFromTable(JMh.z).y;
+    const float limit = pow(nJ, model_gamma) * cReachFromTable(JMh.z) / Mnorm; //TODO: can these tables be sampled at the same positions
 
     if (!inverse)
     {
