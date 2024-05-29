@@ -1467,7 +1467,7 @@ local:
 
     float Jx = JMh.x;
     // focus is Cusp dependent and thus hue
-    float focusJ = compute_focusJ(Jx, _midJ, _cuspMidBlend, _limitJmax);
+    float focusJ = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
 
     if (INVERSE == direction)
     {
@@ -1477,7 +1477,7 @@ local:
         Jx = gamutMapper2(JMh, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
                           JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
                           clamped_smoothness, reachMaxM, _midJ, _model_gamma).x;
-        focusJ = compute_focusJ(Jx, _midJ, _cuspMidBlend, _limitJmax); // TODO: should we recalc anything else?
+        // TODO: should we recalc anything else?
     }
     return gamutMapper2(JMh, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
                         JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
