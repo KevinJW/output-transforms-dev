@@ -156,7 +156,6 @@ local:
   float3 surround[NUMBER_CONDITIONS];
   //bool   HK_mode[NUMBER_CONDITIONS];
   float  F_L[NUMBER_CONDITIONS];
-  float  z[NUMBER_CONDITIONS];
   float3 D_RGB[NUMBER_CONDITIONS];
   float  A_w[NUMBER_CONDITIONS];
   float  y_to_j_A_w[NUMBER_CONDITIONS];
@@ -873,9 +872,11 @@ local:
 
     const float k  = 1.0f / (5.0f * _L_A + 1.0f);
     const float k4 = k * k * k * k;
-    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f);
+    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ...
 
-    z[stage] = compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
+    // Prescale values
+    surround[stage].y = surround[stage].y * compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
+    surround[stage].z = surround[stage].z * 43.0f;
 
     // # Computing achromatic responses for the whitepoint.
     const float3 RGB_wc = D_RGB[stage] * RGB_w;
@@ -1031,11 +1032,11 @@ local:
   //
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return sign(A) * nl_normalise * pow(fabs(A) / A_w[conditions], surround[conditions].y * z[conditions]);
+    return sign(A) * nl_normalise * pow(fabs(A) / A_w[conditions], surround[conditions].y);
   }
   inline float Achromatic_from_J(float J, int conditions)
   {
-    return sign(J) * A_w[conditions] * pow(fabs(J) / nl_normalise, 1.0f / (surround[conditions].y * z[conditions]));
+    return sign(J) * A_w[conditions] * pow(fabs(J) / nl_normalise, 1.0f / surround[conditions].y);
   }
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
@@ -1079,7 +1080,7 @@ local:
     // # Step 9
     // # Computing the correlate of *colourfulness*
     const float et = eccentricity_factor(hr, false);
-    float       M  = 43.0f * surround[conditions].z * et * sqrt(a * a + b * b);
+    float       M  = surround[conditions].z * et * sqrt(a * a + b * b);
 
     if (J == 0.0f) // TODO: is this needed?
       M = 0.0f;
@@ -1104,7 +1105,7 @@ local:
 
     // # Computing *P_p_1* to *P_p_2*.
     const float et    = eccentricity_factor(hr, false);
-    const float P_p_1 = 43.0f * et * surround[conditions].z;
+    const float P_p_1 = et * surround[conditions].z;
     const float P_p_2 = A;
 
     // # Step 3
@@ -1341,7 +1342,7 @@ local:
     return limitJmax * focusDist * getFocusGain(J, cuspJ, limitJmax, focusGainBlend, focusAdjustGain);
   }
 
-// reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
+  // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
   float solve_J_intersect(float2 JM, float focusJ, float maxJ, float slope_gain)
   {
     float a = JM.y / (focusJ * slope_gain);
@@ -1386,7 +1387,7 @@ local:
     return  direction_scaler * (intersectJ - focusJ) / (focusJ * slope_gain);
   }
 
-  float getReachBoundaryM(float reachMaxM, float limitJmax, float gamma, float intersectJ, const float slope)
+  inline float getReachBoundaryM(float reachMaxM, float limitJmax, float gamma, float intersectJ, const float slope)
   {
     return limitJmax * pow(intersectJ / limitJmax, gamma) * reachMaxM / (limitJmax - slope * reachMaxM);
   }
@@ -1540,12 +1541,12 @@ local:
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
     const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
-    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y * z[stage]);
+    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
   }
 
   inline float Hellwig_J_to_Y(float J, int stage)
   {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / (surround[stage].y * z[stage]));
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / surround[stage].y);
     return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
   }
 
