@@ -132,6 +132,14 @@ local:
   float3x3 CAT_CAT16;
   float3x3 CAT_CAT16_INVERSE;
 
+  float3 DL_weights[NUMBER_CONDITIONS];
+  float3 DM_weights[NUMBER_CONDITIONS];
+  float3 DS_weights[NUMBER_CONDITIONS];
+  
+  float3 DL_weights_inv[NUMBER_CONDITIONS];
+  float3 DM_weights_inv[NUMBER_CONDITIONS];
+  float3 DS_weights_inv[NUMBER_CONDITIONS];
+
   float3 achromatic_weights;
   float3 a_weights;
   float3 b_weights;
@@ -231,7 +239,7 @@ local:
     defineParam(LMS_rxy, "LMS Red Primary", float2(0.8336f,  0.1735f));
     defineParam(LMS_gxy, "LMS Green Primary", float2(2.3854f, -1.4659f));
     defineParam(LMS_bxy, "LMS Blue Primary", float2(0.087f , -0.125f));
-    defineParam(LMS_wxy, "LMS White Primary", float2(0.3333333333333f,  0.3333333333333f));
+    defineParam(LMS_wxy, "LMS White Primary", float2(1.0f / 3.0f, 1.0f / 3.0f));
 
     // TODO: improve user facing labels
     defineParam(chroma_compress, "chroma_compress", 2.4f);
@@ -425,7 +433,7 @@ local:
       return float2(0.3127f, 0.3290f);
     }
 
-    return  float2(0.333333f, 0.333333f);
+    return  float2(1.0f / 3.0f, 1.0f / 3.0f);
   }
 
   void init_matrices()
@@ -848,6 +856,31 @@ local:
     return D;
   }
 
+  inline float3 extract_row(const float3x3 matrix, int row)
+  {
+    return {matrix[row][0], matrix[row][1], matrix[row][2]};
+  }
+
+  inline float3 weight_matrix_row(float weight, float3x3 matrix, int row)
+  {
+    return weight * extract_row(matrix, row);
+  }
+
+  inline float3x3 constuct_inverse_matrix(float3 a, float3 b, float3 c)
+  {
+    float3x3 matrix;
+    matrix[0][0] = a.x;
+    matrix[0][1] = a.y;
+    matrix[0][2] = a.z;
+    matrix[1][0] = b.x;
+    matrix[1][1] = b.y;
+    matrix[1][2] = b.z;
+    matrix[2][0] = c.x;
+    matrix[2][1] = c.y;
+    matrix[2][2] = c.z;
+    return matrix.invert();
+  }
+
   void precompute_hellwig(float3 referenceWhite, float XYZ_w_scaler, int conditions, float _L_A, float Y_b, bool HK, bool discountIlluminant, int stage)
   {
     surround[stage] = viewingConditionsToSurround(conditions);
@@ -870,9 +903,19 @@ local:
       D_RGB[stage] = XYZ_w_scaled.y / RGB_w;
     }
 
+    // Pre weight CAT16 matrix by D
+    DL_weights[stage] = weight_matrix_row(D_RGB[stage].x, CAT_CAT16, 0);
+    DM_weights[stage] = weight_matrix_row(D_RGB[stage].y, CAT_CAT16, 1);
+    DS_weights[stage] = weight_matrix_row(D_RGB[stage].z, CAT_CAT16, 2);
+  
+    const float3x3 tempmat = constuct_inverse_matrix(DL_weights[stage], DM_weights[stage], DS_weights[stage]);
+    DL_weights_inv[stage] = extract_row(tempmat, 0);
+    DM_weights_inv[stage] = extract_row(tempmat, 1);
+    DS_weights_inv[stage] = extract_row(tempmat, 2);
+
     const float k  = 1.0f / (5.0f * _L_A + 1.0f);
     const float k4 = k * k * k * k;
-    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ...
+    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
 
     // Prescale values
     surround[stage].y = surround[stage].y * compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
@@ -1034,6 +1077,7 @@ local:
   {
     return sign(A) * nl_normalise * pow(fabs(A) / A_w[conditions], surround[conditions].y);
   }
+
   inline float Achromatic_from_J(float J, int conditions)
   {
     return sign(J) * A_w[conditions] * pow(fabs(J) / nl_normalise, 1.0f / surround[conditions].y);
@@ -1043,10 +1087,14 @@ local:
   {
     // # Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
-    float3 RGB = vector_dot(CAT_CAT16, XYZ);
+    //float3 RGB = vector_dot(CAT_CAT16, XYZ);
 
     // # Step 2
-    float3 RGB_c = D_RGB[conditions] * RGB; // TODO: combine with CAT16
+    //float3 RGB_c = D_RGB[conditions] * RGB; // combine with CAT16
+    float3 RGB_c;
+    RGB_c.x = dot(DL_weights[conditions], XYZ);
+    RGB_c.y = dot(DM_weights[conditions], XYZ);
+    RGB_c.z = dot(DS_weights[conditions], XYZ);
 
     // # Step 3
     // # Applying forward post-adaptation non-linear response compression.
@@ -1123,10 +1171,15 @@ local:
     const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a, conditions);
 
     // # Step 6
-    const float3 RGB = RGB_c / D_RGB[conditions];
+    //const float3 RGB = RGB_c / D_RGB[conditions];
 
     // # Step 7
-    const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
+    //const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
+
+    float3 XYZ;
+    XYZ.x = dot(DL_weights_inv[conditions], RGB_c);
+    XYZ.y = dot(DM_weights_inv[conditions], RGB_c);
+    XYZ.z = dot(DS_weights_inv[conditions], RGB_c);
 
     return XYZ;
   }
