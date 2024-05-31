@@ -660,8 +660,22 @@ local:
     return false;
   }
 
+  float3 compute_test_location(const float2 JMcusp, float3 testJmh, const float limitJmax, const float base_slope,  const float focusJ,
+                               const float analytical_threshold, const float focusAdjustGain, const float2 estimated_hull_gammas, const int conditions)
+  {
+    const float slope_gain       = base_slope * getFocusGain(testJmh.x, limitJmax, focusAdjustGain, analytical_threshold);
+    const float intersectJ       = solve_J_intersect(float2(testJmh.x, testJmh.y), focusJ, limitJmax, slope_gain);
+    const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+    const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
+    const float2 approxLimit =
+        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
+    const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh.z);
+    const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
+    return newLimitRGB;
+  }
+
   bool evaluate_upper_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float topGamma,
-                                     const float limitJmax, const float base_slope,  const float focusJ,
+                                     const float limitJmax, const float base_slope, const float focusJ,
                                      const float analytical_threshold, const float focusAdjustGain,
                                      const float luminance, const int conditions)
   {
@@ -669,16 +683,8 @@ local:
 
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, limitJmax, focusAdjustGain, analytical_threshold);
-      const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
-      const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
-
-      const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
-
-      const float2 approxLimit =
-        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
-      const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
-      const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
+      const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope,
+                                                       focusJ, analytical_threshold, focusAdjustGain, estimated_hull_gammas, conditions);
 
       if (!outside_hull(newLimitRGB, luminance))
       {
@@ -782,16 +788,8 @@ local:
 
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
-      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, limitJmax, focusAdjustGain, analytical_threshold);
-      const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
-      const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
-
-      const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
-
-      const float2 approxLimit =
-        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
-      const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
-      const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
+      const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope,
+                                                       focusJ, analytical_threshold, focusAdjustGain, estimated_hull_gammas, conditions);
 
       if (!any_below_zero(newLimitRGB))
       {
