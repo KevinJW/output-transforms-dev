@@ -671,7 +671,7 @@ local:
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float  analytical_threshold  = lerp(JMcusp.x, _limitJmax, _focusGainBlend); // TODO: precompute?
-      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, JMcusp.x, limitJmax, focusAdjustGain, analytical_threshold);
+      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, limitJmax, focusAdjustGain, analytical_threshold);
       const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
       const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
 
@@ -785,7 +785,7 @@ local:
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float  analytical_threshold  = lerp(JMcusp.x, _limitJmax, _focusGainBlend); // TODO: precompute?
-      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, JMcusp.x, limitJmax, focusAdjustGain, analytical_threshold);
+      const float  slope_gain  = base_slope * getFocusGain(testJmh[testIndex].x, limitJmax, focusAdjustGain, analytical_threshold);
       const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
       const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
 
@@ -1399,7 +1399,7 @@ local:
   }
 
   // https://www.desmos.com/calculator/oe2fscya80
-  inline float getFocusGain(float J, float cuspJ, float limitJmax, float focusAdjustGain, float analytical_threshold)
+  inline float getFocusGain(float J, float limitJmax, float focusAdjustGain, float analytical_threshold)
   {
     if (J <= analytical_threshold)
       return 1.0f; // Analytic inverse possible below cusp
@@ -1532,7 +1532,7 @@ local:
 
 
     float  Jx = JMh.x;
-    float  slope_gain = _base_slope * getFocusGain(Jx, JMcusp.x, _limitJmax, _focusAdjustGain, analytical_threshold);
+    float  slope_gain = _base_slope * getFocusGain(Jx, _limitJmax, _focusAdjustGain, analytical_threshold);
     float2 JM ={JMh.x, JMh.y};
     if (INVERSE == direction)
     {
@@ -1543,7 +1543,7 @@ local:
         Jx = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
                         clamped_smoothness, reachMaxM, _model_gamma).x;
         // TODO: should we recalc anything else?
-        slope_gain = _base_slope * getFocusGain(Jx, JMcusp.x, _limitJmax, _focusAdjustGain, analytical_threshold);
+        slope_gain = _base_slope * getFocusGain(Jx, _limitJmax, _focusAdjustGain, analytical_threshold);
       }
     }
     JM = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
