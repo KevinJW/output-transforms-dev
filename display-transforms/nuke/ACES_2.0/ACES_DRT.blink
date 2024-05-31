@@ -653,7 +653,8 @@ local:
 
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
   {
-    if (newLimitRGB.x > maxRGBtestVal || newLimitRGB.y > maxRGBtestVal || newLimitRGB.z > maxRGBtestVal)
+    if (newLimitRGB.x < 0.0f || newLimitRGB.y < 0.0f || newLimitRGB.z < 0.0f ||
+        newLimitRGB.x > maxRGBtestVal || newLimitRGB.y > maxRGBtestVal || newLimitRGB.z > maxRGBtestVal)
     {
       return true;
     }
@@ -674,13 +675,11 @@ local:
     return newLimitRGB;
   }
 
-  bool evaluate_upper_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float topGamma,
+  bool evaluate_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float2 estimated_hull_gammas,
                                      const float limitJmax, const float base_slope, const float focusJ,
                                      const float analytical_threshold, const float focusAdjustGain,
                                      const float luminance, const int conditions)
   {
-    const float2 estimated_hull_gammas = float2(1.0f / topGamma, 1.0f / lowerHullGamma);
-
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope,
@@ -738,9 +737,10 @@ local:
 
       while (!all_inside && high < 5.0)
       {
-        all_inside = evaluate_upper_hull_gamma_fit(JMcusp, testJmh, test_count, high, limitJmax,
-                                                   base_slope, focusJ, analytical_threshold, focusAdjustGain,
-                                                   luminance, conditions);
+        const float2 estimated_hull_gammas = float2(1.0f / high, 1.0f / lowerHullGamma);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                             base_slope, focusJ, analytical_threshold, focusAdjustGain,
+                                             luminance, conditions);
         if (!all_inside)
         {
           low  = high;
@@ -752,9 +752,10 @@ local:
       while ((high - low) > 1e-5)
       {
         testGamma  = (high + low) / 2.0;
-        all_inside = evaluate_upper_hull_gamma_fit(JMcusp, testJmh, test_count, testGamma, limitJmax,
-                                                   base_slope, focusJ, analytical_threshold, focusAdjustGain,
-                                                   luminance, conditions);
+        const float2 estimated_hull_gammas = float2(1.0f / testGamma, 1.0f / lowerHullGamma);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                             base_slope, focusJ, analytical_threshold, focusAdjustGain,
+                                             luminance, conditions);
         if (all_inside)
         {
           high = testGamma;
@@ -777,26 +778,6 @@ local:
       return true;
     }
     return false;
-  }
-
-  bool evaluate_lower_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float bottomGamma,
-                                     const float limitJmax, const float base_slope, const float focusJ,
-                                     const float analytical_threshold, const float focusAdjustGain,
-                                     const float luminance, const int conditions)
-  {
-    const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / bottomGamma);
-
-    for (int testIndex = 0; testIndex < test_count; ++testIndex)
-    {
-      const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope,
-                                                       focusJ, analytical_threshold, focusAdjustGain, estimated_hull_gammas, conditions);
-
-      if (!any_below_zero(newLimitRGB))
-      {
-        return false;
-      }
-    }
-    return true;
   }
 
   void initialise_lower_hull_gamma(const float midJ, const float cuspMidBlend, const float limitJmax,
@@ -835,8 +816,9 @@ local:
 
       while (!all_inside && high < 5.0)
       {
-        all_inside = evaluate_lower_hull_gamma_fit(JMcusp, testJmh, test_count, high, limitJmax, base_slope, focusJ,
-                                                   analytical_threshold, focusAdjustGain, luminance, conditions);
+        const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / high);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, focusJ,
+                                             analytical_threshold, focusAdjustGain, luminance, conditions);
         if (!all_inside)
         {
           low  = high;
@@ -848,8 +830,9 @@ local:
       while ((high - low) > 1e-5)
       {
         testGamma  = (high + low) / 2.0;
-        all_inside = evaluate_lower_hull_gamma_fit(JMcusp, testJmh, test_count, testGamma, limitJmax, base_slope, focusJ,
-                                                   analytical_threshold, focusAdjustGain, luminance, conditions);
+        const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, 1.0f / testGamma);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, focusJ,
+                                             analytical_threshold, focusAdjustGain, luminance, conditions);
         if (all_inside)
         {
           high = testGamma;
