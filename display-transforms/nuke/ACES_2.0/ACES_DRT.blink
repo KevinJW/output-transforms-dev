@@ -576,7 +576,7 @@ local:
       const float  hNorm   = float(i) / (table_size);
       const float3 RGB     = HSV_to_RGB(float3(hNorm, 1.0f, 1.0f)) * float3(luminance);
       const float3 cusp    = linear_RGB_to_JMh(RGB, matrix, conditions);
-      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp.z, 0.0f); // TODO: focusJ
+      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp.z, 0.0f); // TODO: focusJ compute_focusJ(cusp.x, midJ, cuspMidBlend, limitJmax)
       if (tempTableUnsorted[i].z < tempTableUnsorted[minhIndex].z)
       {
         minhIndex = i;
@@ -594,6 +594,15 @@ local:
     for (int i = 0; i < tableSize; ++i)
     {
       output_table[i] = tableUnsorted[(offsetIndex + i) % tableSize];
+    }
+  }
+
+  void smooth_table(float4 * table, const int tableSize, float2 scale)
+  {
+    for (int i = 0; i < tableSize; ++i)
+    {
+      table[i].x = table[i].x * scale.x;
+      table[i].y = table[i].y * scale.y;
     }
   }
 
@@ -662,8 +671,11 @@ local:
       const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
       const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
       const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+
+      const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
+
       const float2 approxLimit =
-        findGamutBoundaryIntersection(JMcusp, focusJ, limitJmax, intersectJ, slope_gain, clamped_smoothness, estimated_hull_gammas, slope);
+        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
       const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
 
@@ -700,7 +712,7 @@ local:
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
       //  default value. This will get overridden as we loop, but can be a good diagnostic to make sure things are working
       limitingGamutGammas[i].x    = -1.0f;
-      const float2 JMcusp = limitingCuspFromTable(hue);  // TODO; could this be baked in?
+      const float2 JMcusp = limitingCuspFromTable(hue);
 
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
@@ -772,8 +784,11 @@ local:
       const float  slope_gain  = compute_slope_gain(testJmh[testIndex].x, JMcusp.x, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
       const float  intersectJ  = solve_J_intersect(float2(testJmh[testIndex].x, testJmh[testIndex].y), focusJ, limitJmax, slope_gain);
       const float  slope       = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+
+      const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
+
       const float2 approxLimit =
-        findGamutBoundaryIntersection(JMcusp, focusJ, limitJmax, intersectJ, slope_gain, clamped_smoothness, estimated_hull_gammas, slope);
+        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
       const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[testIndex].z);
       const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
 
@@ -803,7 +818,7 @@ local:
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
 
       limitingGamutGammas[i].y    = -5.0f;
-      const float2 JMcusp = limitingCuspFromTable(hue);  // TODO; could this be baked in?
+      const float2 JMcusp = limitingCuspFromTable(hue);
 
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
@@ -953,6 +968,7 @@ local:
     initialise_cusp_table(cgamutCuspTable, gamutCuspTableSize, AP1_to_XYZ, _peakLuminance, SOURCE_CONDITIONS); // TODO: Does peakLuminance make sense?
     initialise_reach_cusp_table(reachGamutCuspTable, gamutCuspTableSize, _limitJmax, XYZ_to_AP1, DISPLAY_CONDITIONS); // TODO: is the reach gamut supposed to be DISPLAY?
     initialise_cusp_table(limitingGamutCuspTable, gamutCuspTableSize, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
+    smooth_table(limitingGamutCuspTable, gamutCuspTableSize, smooth_cusp_scale);
     initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
     initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
   }
@@ -1356,7 +1372,7 @@ local:
   // "PowerP" compression function (also used in the ACES Reference Gamut Compression transform)
   // values of v above  'threshold' are compressed by a 'power' function
   // so that an input value of 'limit' results in an output of 1.0
-  float compressPowerP(float v, float threshold, float limit, float power, int inverse)
+  float compressPowerP(float v, float threshold, float limit, float power, bool inverse)
   {
     float s = (limit - threshold) / pow(pow((1.0f - threshold) / (limit - threshold), -power) - 1.0f, 1.0f / power);
 
@@ -1446,14 +1462,11 @@ local:
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
-  float2 findGamutBoundaryIntersection(float2 JM_cusp_raw, float J_focus, float J_max, float J_intersect_source, float slope_gain, float smoothness,
+  float2 findGamutBoundaryIntersection(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
                                        float2 estimated_hull_gammas, const float slope)
   {
     const float  gamma_top    = estimated_hull_gammas.x;
     const float  gamma_bottom = estimated_hull_gammas.y;
-    const float2 JM_cusp      = JM_cusp_raw * smooth_cusp_scale;  // TODO; could this be baked in?
-
-    float J_intersect_cusp   = solve_J_intersect(JM_cusp, J_focus, J_max, slope_gain); //TODO could this be in the cusp data
 
     float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
 
@@ -1467,29 +1480,32 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  float3 gamutMapper2(float3 JMh, bool direction, float Jx, float limitJmax, float focusDist, float focusGainBlend, float focusAdjustGain,
-                      float2 JMcusp, float focusJ, float cuspMidBlend, float2 estimated_hull_gammas, float smoothness, float reachMaxM, float midJ, float model_gamma)
+  inline float gamut_compress_alpha(float initial, float limit, float maximum, bool direction) // TODO better name
   {
-    const float2 project_from = float2(JMh.x, JMh.y);
+    const float difference = max(1.0001f, maximum / limit); // TODO: magic threshold? also in compressPowerP function needed here?
+    const float threshold  = max(_compressionFuncParams.x, 1.0f / difference);
+    float t                = initial / limit;
+    t                      = compressPowerP(t, threshold, difference, _compressionFuncParams.w, direction);
+    return t;
+  }
 
-    // Calculate where the out of gamut color is projected to
-    const float  slope_gain    = compute_slope_gain(Jx, JMcusp.x, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
-    const float  intersectJ    = solve_J_intersect(project_from, focusJ, limitJmax, slope_gain);
-    const float2 project_to    = float2(intersectJ, 0.0f);
-    const float  slope         = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+  float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float focusDist, float focusGainBlend, float focusAdjustGain,
+                    float2 JMcusp, float focusJ, float cuspMidBlend, float2 estimated_hull_gammas, float smoothness,
+                    float reachMaxM, float midJ, float model_gamma)
+  {
+    const float  slope_gain       = compute_slope_gain(Jx, JMcusp.x, limitJmax, focusDist, focusGainBlend, focusAdjustGain);
+    const float  intersectJ       = solve_J_intersect(JM, focusJ, limitJmax, slope_gain);
+    const float  slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+    const float  J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain); //TODO could this be in the cusp data
+    const float2 ganutBoundary    = findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, smoothness, estimated_hull_gammas, slope);
 
-    const float2 ganutBoundary = findGamutBoundaryIntersection(JMcusp, focusJ, limitJmax, intersectJ, slope_gain, smoothness, estimated_hull_gammas, slope);
-
-    // Get hue dependent compression parameters depend on J
-    const float  locusMax     = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
-    const float  difference   = max(1.0001f, locusMax / ganutBoundary.y); // TODO: magic threshold?
-    const float  threshold    = max(_compressionFuncParams.x, 1.0f / difference);
+    const float  locusMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
 
     // Compress the out of gamut color along the projection line
-    float v      = project_from.y / ganutBoundary.y;
-    v            = compressPowerP(v, threshold, difference, _compressionFuncParams.w, direction);
-    const float2 JMcompressed = project_to + v * (ganutBoundary - project_to);
-    return float3(JMcompressed.x, JMcompressed.y, JMh.z);
+    const float  t            = gamut_compress_alpha(JM.y, ganutBoundary.y, locusMax, direction);
+    const float2 project_to   = float2(intersectJ, 0.0f);
+    const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
+    return JMcompressed;
   }
 
   inline float compute_focusJ(float J, float midJ, float cuspMidBlend, float limitJmax)
@@ -1509,31 +1525,30 @@ local:
       return JMh;
     }
 
-
     // Assumes 'h' component is wrapped [0.0, 360.0)
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
-    const float2 JMcusp                = limitingCuspFromTable(JMh.z);  // TODO; could this be baked in?
-
+    const float2 JMcusp                = limitingCuspFromTable(JMh.z);
     const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
     const float  reachMaxM             = cReachFromTable(JMh.z);
+    const float  focusJ                = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax); // TODO: precompute
 
     float Jx = JMh.x;
-    // focus is Cusp dependent and thus hue
-    float focusJ = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
-
+    float2 JM ={JMh.x, JMh.y};
     if (INVERSE == direction)
     {
       // Inverse path is a multi-step iterative to solve for the original 'J'
       // Analytic inverse below threshold extra pass approximation above
-      if (Jx > lerp(JMcusp.x, _limitJmax, _focusGainBlend))
-        Jx = gamutMapper2(JMh, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
-                          JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
-                          clamped_smoothness, reachMaxM, _midJ, _model_gamma).x;
+      if (Jx > lerp(JMcusp.x, _limitJmax, _focusGainBlend)) // TODO: where is this condition in the fwd mapper? precompute?
+        Jx = gamutMapJM(JM, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
+                        JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
+                        clamped_smoothness, reachMaxM, _midJ, _model_gamma).x;
         // TODO: should we recalc anything else?
     }
-    return gamutMapper2(JMh, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
-                        JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
-                        clamped_smoothness, reachMaxM, _midJ, _model_gamma);
+    JM = gamutMapJM(JM, direction, Jx, _limitJmax, _focusDist, _focusGainBlend, _focusAdjustGain,
+                    JMcusp, focusJ, _cuspMidBlend, estimated_hull_gammas,
+                    clamped_smoothness, reachMaxM, _midJ, _model_gamma);
+
+    return {JM.x, JM.y, JMh.z};
   }
 
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
@@ -1603,7 +1618,7 @@ local:
     return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
   }
 
-  float3 forwardTonescale(float3 inputJMh, int conditions) // TODO: switch float3 to single channel?
+  float3 forwardTonescale(float3 inputJMh, int conditions)
   {
     float  linear        = Hellwig_J_to_Y(inputJMh.x, conditions);
     float  luminanceTS   = aces_ts_fwd(linear);
@@ -1613,7 +1628,7 @@ local:
     return tonemappedJMh;
   }
 
-float3 inverseTonescale(float3 JMh, int conditions) // TODO: switch float3 to single channel?
+float3 inverseTonescale(float3 JMh, int conditions)
   {
     float3 untonemappedColourJMh = JMh;
     float  luminance             = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
@@ -1647,8 +1662,8 @@ float3 inverseTonescale(float3 JMh, int conditions) // TODO: switch float3 to si
   // appropriate rate of change from display black to display white, and from
   // achromatic outward to purer colors.
   //
-  float chromaCompression(float3 JMh, float origJ, bool inverse, float limitJmax, float model_gamma,
-                          float sat, float sat_thr, float compr)
+  inline float chromaCompression(float3 JMh, float origJ, bool inverse, float limitJmax, float model_gamma,
+                                 float sat, float sat_thr, float compr)
   {
     // Assumes 'h' component is wrapped [0.0, 360.0)
     float M = JMh.y;
@@ -1698,10 +1713,10 @@ float3 inverseTonescale(float3 JMh, int conditions) // TODO: switch float3 to si
     return M;
   }
 
-  inline float3 compressChroma(float3 JMh, float originalJ, bool inverse)
+  float3 compressChroma(float3 JMh, float originalJ, bool inverse)
   {
     JMh.y = chromaCompression(JMh, originalJ, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
-    if (inverse) // TODO: should this be in the chromaCompression function
+    if (inverse)
       JMh.x = originalJ;
     return JMh;
   }
