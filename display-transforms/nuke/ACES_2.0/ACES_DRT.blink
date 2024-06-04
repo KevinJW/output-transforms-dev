@@ -376,16 +376,8 @@ local:
     achromatic_weights = float3(ra, 1.0f, ba);
     a_weights          = float3(11.0f, -12.0f, 1.0f) / 11.0f;
     b_weights          = float3(1.0f, 1.0f, -2.0f) / 9.0f;
-    // clang-format off
-    float panlrcm_data[]=
-    {
-      achromatic_weights.x, achromatic_weights.y, achromatic_weights.z,
-      a_weights.x, a_weights.y, a_weights.z, 
-      b_weights.x, b_weights.y, b_weights.z,
-    };
-    // clang-format on
-    panlrcm.setArray(panlrcm_data);
-    panlrcm = panlrcm.invert();
+
+    panlrcm =  constuct_inverse_matrix(achromatic_weights, a_weights, b_weights);
 
     for (int i = 0; i < 3; i++)
     {
@@ -891,7 +883,7 @@ local:
     // # Computing degree of adaptation :math:`D`.
     if (!discountIlluminant)
     {
-      float D      = clamp(degree_of_adaptation(surround[stage].x, _L_A), 0, 1);
+      float D      = clamp(degree_of_adaptation(surround[stage].x, _L_A), 0.0f, 1.0f);
       D_RGB[stage] = D * XYZ_w_scaled.y / RGB_w + 1 - D;
     }
     else
