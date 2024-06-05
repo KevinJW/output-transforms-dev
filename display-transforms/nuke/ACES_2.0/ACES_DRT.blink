@@ -77,6 +77,8 @@ param:
 #define DEBUG_Jconstants 60
 #define DEBUG_FocusConstants 61
 
+#define DEBUG_limitingFocusJ 70
+
 #endif
 
   int diagnosticMode;
@@ -576,7 +578,7 @@ local:
       const float  hNorm   = float(i) / (table_size);
       const float3 RGB     = HSV_to_RGB(float3(hNorm, 1.0f, 1.0f)) * float3(luminance);
       const float3 cusp    = linear_RGB_to_JMh(RGB, matrix, conditions);
-      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp.z, 0.0f); // TODO: focusJ compute_focusJ(cusp.x, midJ, cuspMidBlend, limitJmax)
+      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp.z, 0.0f);
       if (tempTableUnsorted[i].z < tempTableUnsorted[minhIndex].z)
       {
         minhIndex = i;
@@ -613,6 +615,15 @@ local:
     {
       table[i].x = table[i].x * scale.x;
       table[i].y = table[i].y * scale.y;
+    }
+  }
+
+  void precompute_intersections(float4 * table)
+  {
+    for (int i = 0; i < gamutCuspTableSize + additonal_entries; ++i)
+    {
+      table[i].z = compute_focusJ(table[i].x, _midJ, _cuspMidBlend, _limitJmax);
+      table[i].w = lerp(table[i].x, _limitJmax, _focusGainBlend);
     }
   }
 
@@ -726,17 +737,17 @@ local:
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
       //  default value. This will get overridden as we loop, but can be a good diagnostic to make sure things are working
       limitingGamutGammas[i].x    = -1.0f;
-      const float2 JMcusp = limitingCuspFromTable(hue);
+      const float4 cusp   = limitingCuspFromTable(hue);
+      const float2 JMcusp = float2(cusp.x, cusp.y);
+      const float analytical_threshold = cusp.w; // lerp(JMcusp.x, limitJmax, _focusGainBlend); // TODO: precompute?
+      const float focusJ               = cusp.z; //compute_focusJ(JMcusp.x, midJ, cuspMidBlend, limitJmax);
 
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
       {
-        // create test values halfway between the cusp and the Jmax
+        // create test values between the cusp and the Jmax
         testJmh[testIndex] = float3(JMcusp.x + ((limitJmax - JMcusp.x) * testPositions[testIndex]), JMcusp.y, hue);
       }
-
-      const float analytical_threshold = lerp(JMcusp.x, limitJmax, _focusGainBlend); // TODO: precompute?
-      const float focusJ               = compute_focusJ(JMcusp.x, midJ, cuspMidBlend, limitJmax);
 
       const float search_range = 0.4;
       float       low          = 0.4;
@@ -806,16 +817,16 @@ local:
       const float hue = base_hue_for_position(i, gamutCuspTableSize);
 
       limitingGamutGammas[i].y    = -5.0f;
-      const float2 JMcusp = limitingCuspFromTable(hue);
+      const float4 cusp   = limitingCuspFromTable(hue);
+      const float2 JMcusp = float2(cusp.x, cusp.y);
+      const float analytical_threshold = cusp.w; // lerp(JMcusp.x, limitJmax, _focusGainBlend); // TODO: precompute?
+      const float focusJ               = cusp.z; //compute_focusJ(JMcusp.x, midJ, cuspMidBlend, limitJmax);
 
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
       {
         testJmh[testIndex] = float3(JMcusp.x * testPositions[testIndex], JMcusp.y, hue);
       }
-
-      const float  focusJ                = compute_focusJ(JMcusp.x, midJ, cuspMidBlend, limitJmax); //lerp(JMcusp.x, midJ, cuspMidBlend); // TODO: different
-      const float  analytical_threshold  = lerp(JMcusp.x, limitJmax, _focusGainBlend); // TODO: precompute?
 
       const float search_range = 0.4;
       float       low          = 0.8;
@@ -958,6 +969,7 @@ local:
     initialise_reach_cusp_table(reachGamutCuspTable, gamutCuspTableSize, _limitJmax, XYZ_to_AP1, DISPLAY_CONDITIONS); // TODO: is the reach gamut supposed to be DISPLAY?
     initialise_cusp_table(limitingGamutHuesLookup, limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
     smooth_table(limitingGamutCuspTable, gamutCuspTableSize + additonal_entries, smooth_cusp_scale);
+    precompute_intersections(limitingGamutCuspTable);
     initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
     initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
   }
@@ -1274,19 +1286,23 @@ local:
     return high_i;
   }
 
-  float2 limitingCuspFromTable(float wrapped_hue)
+  float limiting_lerp_fraction(float wrapped_hue, int pos)
+  {
+    return (wrapped_hue - limitingGamutHuesLookup[pos - 1])
+                     / (limitingGamutHuesLookup[pos] - limitingGamutHuesLookup[pos - 1]);
+  }
+
+  float4 limitingCuspFromTable(float wrapped_hue)
   {
     const int    pos = lookupLimitingCuspHue(wrapped_hue);
-    const float  t   = (wrapped_hue - limitingGamutHuesLookup[pos - 1])
-                     / (limitingGamutHuesLookup[pos] - limitingGamutHuesLookup[pos - 1]);
+    const float  t   = limiting_lerp_fraction(wrapped_hue, pos);
 
     const float4 lo  = limitingGamutCuspTable[pos - 1];
     const float4 hi  = limitingGamutCuspTable[pos];
 
-    const float cuspJ = lerp(lo.x, hi.x, t);
-    const float cuspM = lerp(lo.y, hi.y, t);
+    const float4 cusp = lerp(lo, hi, t);
 
-    return float2(cuspJ, cuspM);
+    return cusp;
   }
 
   // TODO: retest passing in table to search in.
@@ -1516,11 +1532,12 @@ local:
 
     // Assumes 'h' component is wrapped [0.0, 360.0)
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
-    const float2 JMcusp                = limitingCuspFromTable(JMh.z);
+    const float4 cusp                  = limitingCuspFromTable(JMh.z);
+    const float2 JMcusp                = float2(cusp.x, cusp.y);
     const float2 estimated_hull_gammas = hueDependantHullGammas(JMh.z);
     const float  reachMaxM             = cReachFromTable(JMh.z);
-    const float  focusJ                = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax); // TODO: precompute
-    const float  analytical_threshold  = lerp(JMcusp.x, _limitJmax, _focusGainBlend); // TODO: precompute?
+    const float  focusJ                = cusp.z; //compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax); // TODO: precompute
+    const float  analytical_threshold  = cusp.w; // lerp(JMcusp.x, _limitJmax, _focusGainBlend); // TODO: precompute?
 
 
     float  Jx = JMh.x;
@@ -1801,7 +1818,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_limitingGamutCuspTable == diagnosticMode)
     {
-        float2 cusp = limitingCuspFromTable(src.z);
+        float4 cusp = limitingCuspFromTable(src.z);
         output = float3(cusp.x, cusp.y, src.z);
     }
     else if (DEBUG_cgamutCuspTable == diagnosticMode)
@@ -1842,6 +1859,19 @@ float3 inverseTonescale(float3 JMh, int conditions)
     else if (DEBUG_FocusConstants == diagnosticMode)
     {
         output = float3(_cuspMidBlend, _focusGainBlend, _focusAdjustGain);
+    }
+    else if (DEBUG_limitingFocusJ == diagnosticMode)
+    {
+        const float wrapped_hue = wrap_to_360(src.z);
+
+        const int    pos = lookupLimitingCuspHue(wrapped_hue);
+        const float  t   = limiting_lerp_fraction(wrapped_hue, pos);
+        const float4 lo  = limitingGamutCuspTable[pos - 1];
+        const float4 hi  = limitingGamutCuspTable[pos];
+
+        const float4 cusp   = lerp(lo, hi, t);
+        const float  focusJ = compute_focusJ(cusp.x, _midJ, _cuspMidBlend, _limitJmax);
+        output = float3(cusp.z, cusp.w, focusJ); // How close are cusp.z and FocusJ
     }
     else
     {
