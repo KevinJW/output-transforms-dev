@@ -1,0 +1,196 @@
+kernel ACES_DRT_Encoding_Kernel : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessPoint, eEdgeClamped> src; // the input image
+  Image<eWrite>                            dst; // the output image
+
+param:
+  //
+  // Input Parameters
+  //
+  bool invert;
+
+  // Primaries of the Input Image
+  // 0: AP0-ACES
+  // 1: AP1-ACES
+  // 2: sRGB/Rec.709-D65
+  // 3: Rec.2020-D65
+  // 4: P3-D65
+  // 5: P3-DCI
+  // 6: XYZ
+  int limitingPrimaries;
+  int encodingPrimaries;
+
+  // Reference Luminance in Cd/sqm
+  float referenceLuminance;
+
+  bool limitClamp;
+  bool whitepoint_scale;
+
+local:
+  float3x3 XYZ_to_RGB;
+  float3x3 RGB_to_XYZ;
+  float3x3 identity_matrix;
+
+  void define()
+  {
+    defineParam(invert, "Direction", false);
+    defineParam(limitingPrimaries, "Limiting Primaries", 2);
+    defineParam(encodingPrimaries, "Encoding Primaries", 2);
+    defineParam(referenceLuminance, "Reference Luminance", 100.0f);
+    defineParam(limitClamp, "Clamp to limiting space", true);
+    defineParam(whitepoint_scale, "White point scale", true);
+  }
+
+  float3x3 RGBPrimsToXYZMatrix(float2 rxy, float2 gxy, float2 bxy, float2 wxy, float Y, bool direction)
+  {
+    // # given r g b chromaticities and whitepoint, convert RGB colors to XYZ
+    // # based on CtlColorSpace.cpp from the CTL source code : 77
+    // # param: xy - dict of chromaticity xy coordinates: rxy: float2(x, y) etc
+    // # param: Y - luminance of "white" - defaults to 1.0
+    // # param: inverse - calculate XYZ to RGB instead
+
+    float2 r = rxy;
+    float2 g = gxy;
+    float2 b = bxy;
+    float2 w = wxy;
+
+    float X = w.x * Y / w.y;
+    float Z = (1 - w.x - w.y) * Y / w.y;
+
+    // # Scale factors for matrix rows
+    float d = r.x * (b.y - g.y) + b.x * (g.y - r.y) + g.x * (r.y - b.y);
+
+    // clang-format off
+    float Sr =    (X * (b.y - g.y) -      \
+            g.x * (Y * (b.y - 1.0f) +  \
+            b.y * (X + Z)) +       \
+            b.x * (Y * (g.y - 1.0f) + \
+            g.y * (X + Z))) / d ;
+
+    float Sg =    (X * (r.y - b.y) +      \
+            r.x * (Y * (b.y - 1.0f) +  \
+            b.y * (X + Z)) -        \
+            b.x * (Y * (r.y - 1.0f) +  \
+            r.y * (X + Z))) / d ;
+
+    float Sb =    (X * (g.y - r.y) -      \
+            r.x * (Y * (g.y - 1.0f) +  \
+            g.y * (X + Z)) +        \
+            g.x * (Y * (r.y - 1.0f) +  \
+            r.y * (X + Z))) / d ;
+
+    // # Assemble the matrix
+    float Mdata[] =
+    {
+      Sr * r.x, Sg * g.x, Sb * b.x,
+      Sr * r.y, Sg * g.y, Sb * b.y,
+      Sr * (1.0f - r.x - r.y), Sg * (1.0f - g.x - g.y), Sb * (1.0f - b.x - b.y),
+    };
+    // clang-format on
+
+    float3x3 newMatrix;
+    newMatrix.setArray(Mdata);
+
+    // return forward or inverse matrix
+    if (direction == 0)
+    {
+      return newMatrix;
+    }
+    else if (direction == 1)
+    {
+      // create inverse matrix
+      float3x3 newMatrixInverse = newMatrix.invert();
+      return newMatrixInverse;
+    }
+  }
+
+  float3x3 generate_RGB_to_XYZ_matrix(const int which)
+  {
+    if (which == 0)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, 0);
+    }
+    else if (which == 1)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, 0);
+    }
+    else if (which == 2)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.64f, 0.33f), float2(0.3f, 0.6f), float2(0.15f, 0.06f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 3)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 4)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, 0);
+    }
+    else if (which == 5)
+    {
+      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.314f, 0.351f), 1.0f, 0);
+    }
+    else
+    {
+      return identity_matrix;
+    }
+  }
+
+  void init()
+  {
+    float identity_matrix_data[] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    identity_matrix.setArray(identity_matrix_data);
+
+    RGB_to_XYZ = generate_RGB_to_XYZ_matrix(limitingPrimaries);
+    XYZ_to_RGB = RGB_to_XYZ.invert();
+  }
+
+  // multiplies a 3D vector with a 3x3 matrix
+  float3 vector_dot(float3x3 m, float3 v)
+  {
+    float3 r;
+    for (int c = 0; c < 3; c++)
+    {
+      r[c] = m[c][0] * v.x + m[c][1] * v.y + m[c][2] * v.z;
+    }
+
+    return r;
+  }
+
+  float3 apply_limiting_clamp(float3 XYZ)
+  {
+    if (limitClamp)
+    {
+      XYZ = vector_dot(XYZ_to_RGB, XYZ);
+      XYZ = clamp(XYZ, float3{0.0f}, float3{referenceLuminance});
+      XYZ = vector_dot(RGB_to_XYZ, XYZ);
+    }
+    return XYZ;
+  }
+
+  float3 apply_whitepoint_scale(float3 XYZ)
+  {
+    if (whitepoint_scale)
+    {
+      // TODO something
+    }
+    return XYZ;
+  }
+  void process()
+  {
+    SampleType(src) source = src();
+    float3 input(source.x, source.y, source.z);
+    float3 out;
+
+    if (invert)
+    {
+      out = input; // TODO
+    }
+    else
+    {
+      out = apply_limiting_clamp(input);
+      out = apply_whitepoint_scale(out);
+    }
+    dst() = float4(out.x, out.y, out.z, source.w);
+  }
+};
