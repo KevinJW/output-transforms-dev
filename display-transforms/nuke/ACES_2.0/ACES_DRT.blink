@@ -172,7 +172,7 @@ local:
   float  y_to_j_A_w[NUMBER_CONDITIONS];
   float  chromatic_adapt_scale[NUMBER_CONDITIONS];
 
-#define gamutCuspTableSize 360 // Nominal count of hues sampled in the half open range [0.0, 360.0) 
+#define gamutCuspTableSize 720 // Nominal count of hues sampled in the half open range [0.0, 360.0) 
 #define additonal_entries 2    // Adds extra entries to wrap the hues without special cases
 
   // Non-uniform in h
@@ -1511,15 +1511,21 @@ local:
 
   float3 gamutMapper(float3 JMh, bool direction)
   {
+    // Limit to +ve values // TODO test this is neededS
+    if (JMh.x <= 0.0f)
+    {
+      JMh.x = 0.0f;
+      JMh.y = 0.0f;
+    }
+    // Above the expected maximum we explicitly map to 0 M
+    if (JMh.x >= _limitJmax)
+    {
+      JMh.y = 0.0f;
+    }
+
     // We compress M only so avoid mapping near zero
     if (JMh.y == 0.0f)
       return JMh;
-    // Above the expected maximum we explicitly map to 0 M
-    if (JMh.x > _limitJmax)
-    {
-      JMh.y = 0.0f;
-      return JMh;
-    }
 
     // Assumes 'h' component is wrapped [0.0, 360.0)
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
