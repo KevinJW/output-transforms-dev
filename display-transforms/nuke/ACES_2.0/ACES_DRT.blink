@@ -84,6 +84,9 @@ param:
 #define DEBUG_limitingFocusJ 72
 #define DEBUG_reachMConditions 73
 
+#define DEBUG_gamutCompressAlphaFORWARDS 80
+#define DEBUG_gamutCompressAlphaINVERSE 81
+
 #endif
 
   int diagnosticMode;
@@ -1383,7 +1386,7 @@ local:
 
  float compressUnityPowerP(float v, float threshold, float limit, bool inverse)
   {
-    float s = (limit - threshold) / (((1.0f - threshold) / (limit - threshold)) - 1.0f);
+    float s = (limit - threshold) / (((limit - threshold) / (1.0f - threshold)) - 1.0f);
 
     float vCompressed;
 
@@ -1483,13 +1486,65 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  inline float gamut_compress_alpha(float initial, float limit, float maximum, bool direction) // TODO better name
+  inline float gamut_compress_alpha_orig(float initial, float limit, float maximum, bool direction) // TODO better name
   {
     const float difference = max(1.0001f, maximum / limit); // TODO: magic threshold? also in compressPowerP function needed here?
     const float threshold  = max(_compressionFuncParams.x, 1.0f / difference);
     float t                = initial / limit;
-    t                      = compressPowerP(t, threshold, difference, _compressionFuncParams.w, direction); // TODO: power value is set to 1
+    t                      = compressUnityPowerP(t, threshold, difference, direction);
     return t;
+  }
+
+  inline float gamut_compress_alpha(float initial, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
+  {
+    float t               = initial / gamutBoundary;
+    const float locus     = max(1.0001f, locusMaximum / gamutBoundary); // TODO: magic threshold? also in compressPowerP function needed here?
+    const float threshold = max(_compressionFuncParams.x, 1.0f / locus);
+
+    if (t < threshold)
+      return t;
+    
+    const float scale  = (locus - threshold) / (((locus - threshold) / (1.0f - threshold)) - 1.0f);
+    const float factor = (t - threshold) / scale;
+
+    if (direction && factor > 1.0f)
+      return t;
+
+    if (direction)
+    {
+      t = threshold + scale * (-(factor / (factor - 1.0f)));
+    }
+    else
+    {
+      t = threshold + scale * (factor) / (1.0f + factor);
+    }
+
+    return t;
+  }
+
+  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
+  {
+    const float threshold = max(_compressionFuncParams.x * gamutBoundary, gamutBoundary / locusMaximum);
+
+    if (t < threshold)
+      return t / gamutBoundary;
+    
+    const float scale  = (locusMaximum - threshold) / (((locusMaximum - threshold) / (gamutBoundary - threshold)) - 1.0f);
+    const float factor = (t - threshold) / scale;
+
+    if (direction && factor > 1.0f)
+      return t / gamutBoundary;
+
+    if (direction)
+    {
+      t = threshold + scale * (-(factor / (factor - 1.0f)));
+    }
+    else
+    {
+      t = threshold + scale * (factor) / (1.0f + factor);
+    }
+
+    return t / gamutBoundary;
   }
 
   float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float slope_gain,
@@ -1504,7 +1559,7 @@ local:
     const float  locusMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
 
     // Compress the out of gamut color along the projection line
-    const float  t            = gamut_compress_alpha(JM.y, ganutBoundary.y, locusMax, direction);
+    const float  t            = gamut_compress_nonlinear(JM.y, ganutBoundary.y, locusMax, direction);
     const float2 project_to   = float2(intersectJ, 0.0f);
     const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
     return JMcompressed;
@@ -1916,6 +1971,20 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float sM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS);
         const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
         output = float3(sM, dM, wrapped_hue); 
+    }
+    else if (DEBUG_gamutCompressAlphaFORWARDS)
+    {
+        const float m1 = gamut_compress_alpha_orig(src.x, src.y, src.z, FORWARDS);
+        const float m2 = gamut_compress_alpha(src.x, src.y, src.z, FORWARDS);
+        const float m3 = gamut_compress_nonlinear(src.x, src.y, src.z, FORWARDS);
+        output = float3(m1, m2, m3); 
+    }
+    else if (DEBUG_gamutCompressAlphaINVERSE)
+    {
+        const float m1 = gamut_compress_alpha_orig(src.x, src.y, src.z, INVERSE);
+        const float m2 = gamut_compress_alpha(src.x, src.y, src.z, INVERSE);
+        const float m3 = gamut_compress_nonlinear(src.x, src.y, src.z, INVERSE);
+        output = float3(m1, m2, m3); 
     }
     else
     {
