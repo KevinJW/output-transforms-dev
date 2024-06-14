@@ -173,6 +173,8 @@ local:
 #define nl_offset    27.13f
 #define nl_d_scale   nl_gamma * nl_scale * nl_offset
 
+#define j_scale      100.0f
+
   float3 surround[NUMBER_CONDITIONS];
   //bool   HK_mode[NUMBER_CONDITIONS];
   float  F_L[NUMBER_CONDITIONS];
@@ -227,11 +229,11 @@ local:
     defineParam(whiteLimit, "Limiting Whitepoint", 1);
 
     defineParam(_inputViewingConditions, "Input Viewing Conditions", 1);
-    defineParam(L_A_in, "Input Adapting  Luminance", 100.0f);
-    defineParam(Y_b_in, "Input Background Luminance", 20.0f);
+    defineParam(L_A_in, "Input Adapting Luminance", 100.0f); // Note these are rediculously wrong should be nearer 20% of diffuse white
+    defineParam(Y_b_in, "Input Background Luminance", 20.0f); // Note these are rediculously wrong depends on viewing conditions
     defineParam(_outputViewingConditions, "Output Viewing Conditions", 1);
-    defineParam(L_A_out, "Output Adapting  Luminance", 100.0f);
-    defineParam(Y_b_out, "Output Background Luminance", 20.0f);
+    defineParam(L_A_out, "Output Adapting Luminance", 100.0f); // Note these are rediculously wrong should be nearer 20% of diffuse white
+    defineParam(Y_b_out, "Output Background Luminance", 20.0f); // Note these are rediculously wrong depends on viewing conditions
     defineParam(_userSurround, "User Surround Parameters", float3(0.9, 0.59, 0.9));
 
     defineParam(_XYZ_w_scaler, "XYZ White Scaler", 100.0f);
@@ -384,18 +386,18 @@ local:
   //  460.0f, -220.0f, -6300.0f
   void generate_panlrcm(float ra, float ba)
   {
-    achromatic_weights = float3(ra, 1.0f, ba);
-    a_weights          = float3(11.0f, -12.0f, 1.0f) / 11.0f;
-    b_weights          = float3(1.0f, 1.0f, -2.0f) / 9.0f;
+    achromatic_weights = nl_scale * float3(ra, 1.0f, ba);
+    a_weights          = nl_scale * float3(11.0f, -12.0f, 1.0f) / 11.0f;
+    b_weights          = nl_scale * float3(1.0f, 1.0f, -2.0f) / 9.0f;
 
     panlrcm =  constuct_inverse_matrix(achromatic_weights, a_weights, b_weights);
 
     for (int i = 0; i < 3; i++)
     {
       float n = (460.0f / panlrcm[i][0]) / 1403.0f;
-      panlrcm[i][0] *= n;
-      panlrcm[i][1] *= n;
-      panlrcm[i][2] *= n;
+      panlrcm[i][0] *= n / nl_scale;
+      panlrcm[i][1] *= n / nl_scale;
+      panlrcm[i][2] *= n / nl_scale;
     }
   }
 
@@ -957,7 +959,7 @@ local:
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
     const float F_L_W = pow(F_L[stage], nl_gamma);
-    y_to_j_A_w[stage] = (nl_scale * F_L_W) / (nl_offset + F_L_W);
+    y_to_j_A_w[stage] = (F_L_W) / (nl_offset + F_L_W);
 
     // TODO check if this dot product reduction is good enough, check different white points
     chromatic_adapt_scale[stage] = CAT_CAT16[1][0] / D_RGB[stage].x + CAT_CAT16[1][1] / D_RGB[stage].y + CAT_CAT16[1][2] / D_RGB[stage].z;
@@ -1037,14 +1039,14 @@ local:
   float3 post_adaptation_non_linear_response_compression_forward(float3 RGB, int stage)
   {
     const float3 F_L_RGB = pow(F_L[stage] / nl_normalise * fabs(RGB), float3(nl_gamma, nl_gamma, nl_gamma));
-    const float3 RGB_c   = (nl_scale * sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
+    const float3 RGB_c   = (sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
     return RGB_c;
   }
 
   float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB, int stage)
   {
     const float3 absRGB = fabs(RGB);
-    const float3 RGB_p  = sign(RGB) * nl_normalise / F_L[stage] * pow((nl_offset * absRGB) / (nl_scale - absRGB), 
+    const float3 RGB_p  = sign(RGB) * nl_normalise / F_L[stage] * pow((nl_offset * absRGB) / (1.0 - absRGB), 
                                                                       float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
     return RGB_p;
   }
@@ -1105,12 +1107,12 @@ local:
   //
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return sign(A) * nl_normalise * pow(fabs(A) / A_w[conditions], surround[conditions].y);
+    return sign(A) * j_scale * pow(fabs(A) / A_w[conditions], surround[conditions].y); // TODO J scale is not explicitly same nl_normalise factor
   }
 
   inline float Achromatic_from_J(float J, int conditions)
   {
-    return sign(J) * A_w[conditions] * pow(fabs(J) / nl_normalise, 1.0f / surround[conditions].y);
+    return sign(J) * A_w[conditions] * pow(fabs(J) / j_scale, 1.0f / surround[conditions].y);
   }
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
@@ -1679,13 +1681,13 @@ local:
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
     const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
-    return sign(Y) * nl_normalise * pow(((nl_scale * F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
+    return sign(Y) * j_scale * pow(((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
   }
 
   inline float Hellwig_J_to_Y(float J, int stage)
   {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / nl_normalise, 1.0f / surround[stage].y);
-    return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (nl_scale - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y);
+    return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
