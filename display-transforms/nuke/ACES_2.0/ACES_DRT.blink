@@ -1653,7 +1653,7 @@ local:
     const float aces_ts_g_ip   = 0.5f * (aces_ts_c_t + sqrt(aces_ts_c_t * (aces_ts_c_t + 4.0f * aces_ts_t_1)));
     const float aces_ts_g_ipp2 = -aces_ts_m_1 * pow(aces_ts_g_ip / aces_ts_m, 1.0f / aces_ts_g) / (pow(aces_ts_g_ip / aces_ts_m, 1.0f / aces_ts_g) - 1.0f);
     const float aces_ts_w_2    = aces_ts_c / aces_ts_g_ipp2;
-    aces_ts_s_2                = aces_ts_w_2 * aces_ts_m_1;
+    aces_ts_s_2                = (aces_ts_w_2 * aces_ts_m_1) * referenceLuminance; // Factor in our reference
     aces_ts_u_2                = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + aces_ts_w_2), aces_ts_g);
     aces_ts_m_2                = aces_ts_m_1 / aces_ts_u_2;
     aces_ts_inv_upper_limit    = aces_ts_n / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name
@@ -1662,20 +1662,19 @@ local:
   // ACES Tonescale function, proposed by Daniele Siragusano
   inline float aces_ts_fwd(float Y)
   {
-    // removed referenceLuminance scalar as long as it matches nl_normalise
-    Y       = max(0.0f, Y / referenceLuminance); // TODO: we rescale and scale on input and output could this be better
+    Y       = max(0.0f, Y); // TODO: max needed?
     float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
-    float h = max(0.0f, f * f / (f + aces_ts_t_1));
+    float h = max(0.0f, f * f / (f + aces_ts_t_1)); // TODO: max needed?
     return h * aces_ts_n;
   }
 
   inline float aces_ts_rev(float Y)
   {
     Y       = Y / aces_ts_n;
-    Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit);
+    Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
     float h = (Y + sqrt(Y * (4.0f * aces_ts_t_1 + Y))) / 2.0f;
     float f = aces_ts_s_2 / (pow((aces_ts_m_2 / h), (1.0f / aces_ts_g)) - 1.0f);
-    return f * referenceLuminance;
+    return f;
   }
 
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
