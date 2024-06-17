@@ -152,9 +152,13 @@ local:
   float3 DM_weights_inv[NUMBER_CONDITIONS];
   float3 DS_weights_inv[NUMBER_CONDITIONS];
 
-  float3 achromatic_weights;
-  float3 a_weights;
-  float3 b_weights;
+  float3 achromatic_w;
+  float3 a_w;
+  float3 b_w;
+
+  float3 achromatic_weights[NUMBER_CONDITIONS];
+  float3 a_weights[NUMBER_CONDITIONS];
+  float3 b_weights[NUMBER_CONDITIONS];
 
   float3x3 panlrcm;
 
@@ -183,10 +187,16 @@ local:
   float  y_to_j_A_w[NUMBER_CONDITIONS];
   float  chromatic_adapt_scale[NUMBER_CONDITIONS];
 
-#define gamutCuspTableSize 720 // Nominal count of hues sampled in the half open range [0.0, 360.0)
+//#define USE_DEGREES
+#ifdef USE_DEGREES
+#define hue_limit 360.0f
+#else
+#define hue_limit (2 * PI)
+#endif
+#define gamutCuspTableSize 720 // Nominal count of hues sampled in the half open range [0.0, hue_limit) needs to be a multiple of 6 to sample hull corners
 #define additonal_entries 2    // Adds extra entries to wrap the hues without special cases
 #define totalTableSize gamutCuspTableSize + additonal_entries
-#define baseIndex 1            // array index for '0.0' hue index not necessarily actually a 0.0 hue angle
+#define baseIndex 1            // array index for smallest hue, not necessarily actually a 0.0 hue angle
 
   // Non-uniform in h
   float4 limitingGamutCuspTable[totalTableSize];    // { J, M, hue, reachM }
@@ -386,11 +396,11 @@ local:
   //  460.0f, -220.0f, -6300.0f
   void generate_panlrcm(float ra, float ba)
   {
-    achromatic_weights = nl_scale * float3(ra, 1.0f, ba);
-    a_weights          = nl_scale * float3(11.0f, -12.0f, 1.0f) / 11.0f;
-    b_weights          = nl_scale * float3(1.0f, 1.0f, -2.0f) / 9.0f;
+    achromatic_w = nl_scale * float3(ra, 1.0f, ba);
+    a_w          = nl_scale * float3(11.0f, -12.0f, 1.0f) / 11.0f;
+    b_w          = nl_scale * float3(1.0f, 1.0f, -2.0f) / 9.0f;
 
-    panlrcm =  constuct_inverse_matrix(achromatic_weights, a_weights, b_weights);
+    panlrcm =  constuct_inverse_matrix(achromatic_w, a_w, b_w);
 
     for (int i = 0; i < 3; i++)
     {
@@ -596,9 +606,9 @@ local:
     output_table[0]                              = output_table[baseIndex + gamutCuspTableSize - 1];
     output_table[baseIndex + gamutCuspTableSize] = output_table[baseIndex];
 
-    // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, 360.0)
-    output_table[0].z = output_table[0].z - 360.0f;
-    output_table[baseIndex + gamutCuspTableSize].z = output_table[baseIndex + gamutCuspTableSize].z + 360.0f;
+    // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, hue_limit)
+    output_table[0].z = output_table[0].z - hue_limit;
+    output_table[baseIndex + gamutCuspTableSize].z = output_table[baseIndex + gamutCuspTableSize].z + hue_limit;
   }
 
   void copy_table_rotated(float4 * tableUnsorted, const int tableSize, float4 output_table[], const int offsetIndex, const int baseOffset)
@@ -956,7 +966,7 @@ local:
      // Needs to use original as we have not setup alternates at this point
      // Assumes White falls on the original curve
     const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
-    A_w[stage]          = dot(achromatic_weights, RGB_aw);
+    A_w[stage]          = dot(achromatic_w, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
     const float F_L_W = pow(_F_L, nl_gamma);
@@ -964,6 +974,10 @@ local:
 
     // TODO check if this dot product reduction is good enough, check different white points
     chromatic_adapt_scale[stage] = CAT_CAT16[1][0] / D_RGB[stage].x + CAT_CAT16[1][1] / D_RGB[stage].y + CAT_CAT16[1][2] / D_RGB[stage].z;
+
+    achromatic_weights[stage] = achromatic_w / A_w[stage];
+    a_weights[stage]          = surround[stage].z * a_w;
+    b_weights[stage]          = surround[stage].z * b_w;
   }
 
   void init()
@@ -998,18 +1012,25 @@ local:
     return radians * 180.0f / PI;
   }
 
+#ifdef USE_DEGREES
   // convert degrees to radians
-  inline float radians(float degrees)
+  inline float radians(float hue)
   {
-    return degrees / 180.0f * PI;
+    return hue / 180.0f * PI;
   }
-
-  inline float wrap_to_360(float hue)
+#else
+  inline float radians(float hue)
   {
-    float y = fmod(hue, 360.0f);
+    return hue;
+  }
+#endif
+
+  inline float wrap_hue(float hue)
+  {
+    float y = fmod(hue, hue_limit);
     if (y < 0.0)
     {
-      y = y + 360.0f;
+      y = y + hue_limit;
     }
     return y;
   }
@@ -1108,12 +1129,12 @@ local:
   //
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return sign(A) * j_scale * pow(fabs(A) / A_w[conditions], surround[conditions].y); // TODO make weights separate based on conditions, then factor in A_W
+    return sign(A) * j_scale * pow(fabs(A), surround[conditions].y);
   }
 
   inline float Achromatic_from_J(float J, int conditions)
   {
-    return sign(J) * A_w[conditions] * pow(fabs(J) / j_scale, 1.0f / surround[conditions].y);
+    return sign(J) * A_w[conditions] * pow(fabs(J) / j_scale, 1.0f / surround[conditions].y); // TODO move A_w[conditions] to panlrcm
   }
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
@@ -1139,13 +1160,17 @@ local:
     // # Converting to preliminary cartesian coordinates.
     // basically a 3x3 matrix
 
-    const float A = dot(achromatic_weights, RGB_a);
-    const float a = dot(a_weights, RGB_a);
-    const float b = dot(b_weights, RGB_a);
+    const float A = dot(achromatic_weights[conditions], RGB_a);
+    const float a = dot(a_weights[conditions], RGB_a);
+    const float b = dot(b_weights[conditions], RGB_a);
 
     // # Computing the *hue* angle
     const float hr = atan2(b, a);
-    const float h  = wrap_to_360(degrees(hr));
+#ifdef USE_DEGREES
+    const float h  = wrap_hue(degrees(hr));
+#else
+    const float h  = wrap_hue(hr);
+#endif
 
     // # Step 7
     // # Computing the correlate of *Lightness*
@@ -1160,8 +1185,9 @@ local:
 
     // # Step 9
     // # Computing the correlate of *colourfulness*
-    const float et = eccentricity_factor(hr, false);
-    float       M  = surround[conditions].z * et * sqrt(a * a + b * b); // TODO: can we factor surround into A and b weights?
+    //const float et = eccentricity_factor(hr, false);
+    //float       M  = surround[conditions].z * et * sqrt(a * a + b * b);
+    float M = sqrt(a * a + b * b); // Valid as et == 1.0
 
     if (J == 0.0f) // TODO: is this needed?
       M = 0.0f;
@@ -1185,8 +1211,8 @@ local:
     const float A = Achromatic_from_J(J, conditions);
 
     // # Computing *P_p_1* to *P_p_2*.
-    const float et    = eccentricity_factor(hr, false);
-    const float P_p_1 = et * surround[conditions].z;
+    //const float et    = eccentricity_factor(hr, false);
+    const float P_p_1 = surround[conditions].z; // * et;
     const float P_p_2 = A;
 
     // # Step 3
@@ -1233,12 +1259,7 @@ local:
 
   inline int hue_position_in_uniform_table(float wrapped_hue, int table_size)
   {
-    return int(wrapped_hue / 360.0f * table_size);
-  }
-
-  inline float base_hue_for_position(int i_lo, int table_size)
-  {
-    return float(i_lo) * 360.0f / float(table_size);
+    return int(wrapped_hue / hue_limit * table_size);
   }
 
   // linear interpolation between two values a & b with the bias t
@@ -1591,7 +1612,7 @@ local:
     if (JMh.y == 0.0f)
       return JMh;
 
-    // Assumes 'h' component is wrapped [0.0, 360.0)
+    // Assumes 'h' component is wrapped [0.0, hue_limit)
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
     const int    pos                   = lookupLimitingCuspHue(JMh.z);
     const float  t                     = limiting_lerp_fraction(JMh.z, pos);
@@ -1642,6 +1663,7 @@ local:
   void init_tonescale_constants(float peakLuminance)
   {
     // pre-calculate aces_ts  constants
+    // TODO: this is a mess, tidy up 100.0 and 10000 constants, plus factor out equations into clearer functions
     aces_ts_n = peakLuminance;
     const float aces_ts_r_hit  = aces_ts_r_hit_min + (aces_ts_r_hit_max - aces_ts_r_hit_min) * (log(aces_ts_n / aces_ts_n_r) / log(10000.0f / 100.0f));
     const float aces_ts_m_0    = aces_ts_n / aces_ts_n_r;
@@ -1680,14 +1702,14 @@ local:
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
-    const float F_L_Y = pow(F_L[stage] * fabs(Y), nl_gamma);
+    const float F_L_Y = pow(F_L[stage] * fabs(Y), nl_gamma); // TODO: can we eliminate the fabs and sign calls?
     return sign(Y) * j_scale * pow(((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
   }
 
   inline float Hellwig_J_to_Y(float J, int stage)
   {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y);
-    return sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
+    const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y); // TODO: can we eliminate the fabs and sign calls?
+    return sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma);
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
@@ -1718,12 +1740,16 @@ float3 inverseTonescale(float3 JMh, int conditions)
     if (x > limit)
       return x;
 
-    k2       = max(k2, 0.001f); // TODO; magic constant
-    k1       = sqrt(k1 * k1 + k2 * k2);
-    float k3 = (limit + k1) / (limit + k2);
+    k2             = max(k2, 0.001f); // TODO; magic constant
+    k1             = sqrt(k1 * k1 + k2 * k2);
+    const float k3 = (limit + k1) / (limit + k2);
 
     if (!inverse)
-      return 0.5f * (k3 * x - k1 + sqrt((k3 * x - k1) * (k3 * x - k1) + 4 * k2 * k3 * x));
+    {
+      const float minus_b = k3 * x - k1;
+      const float minus_c = k2 * k3 * x;
+      return 0.5f * (minus_b + sqrt(minus_b * minus_b + 4 * minus_c)); // a is 1.0, mins_b squared == b^2
+    }
     else
       return (x * x + k1 * x) / (k3 * (x + k2));
   }
@@ -1737,7 +1763,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
   inline float chromaCompression(float3 JMh, float origJ, bool inverse, float limitJmax, float model_gamma,
                                  float sat, float sat_thr, float compr)
   {
-    // Assumes 'h' component is wrapped [0.0, 360.0)
+    // Assumes 'h' component is wrapped [0.0, hue_limit)
     float M = JMh.y;
     if (M == 0.0f)
       return M;
@@ -1749,6 +1775,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
     const float  MReachnorm = limits.y;
     const float  limit      = pow(nJ, model_gamma) * MReachnorm;
 
+    const float toe_limit           = limit - 0.001f;  // TODO; magic constant
+    const float toe_snJ_sat         = snJ * sat;
+    const float toe_sqrt_nJ_sat_thr = sqrt(nJ * nJ + sat_thr);
     if (!inverse)
     {
       // Rescaling of M with the tonescaled J to get the M to the same range as
@@ -1764,7 +1793,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
       // increases saturation in the shadows and mid-tones but not in the highlights.
       // The 0.001 offset starts the expansions slightly above zero.  The sat_thr makes
       // the toe less aggressive near black to reduce the expansion of noise.
-      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), FORWARDS); // TODO; magic constant
+      M = limit - toe(limit - M, toe_limit, toe_snJ_sat, toe_sqrt_nJ_sat_thr, FORWARDS);
 
       // Compress the colorfulness.  The goal is to compress less saturated colors more and
       // more saturated colors less, especially in the highlights.  This step creates the
@@ -1779,7 +1808,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     {
       M /= Mnorm;
       M = toe(M, limit, nJ * compr, snJ, INVERSE);
-      M = limit - toe(limit - M, limit - 0.001f, snJ * sat, sqrt(nJ * nJ + sat_thr), INVERSE); // TODO; magic constant
+      M = limit - toe(limit - M, toe_limit, toe_snJ_sat, toe_sqrt_nJ_sat_thr, INVERSE);
       M *= Mnorm;
       M *= pow(JMh.x / origJ, -model_gamma);
     }
@@ -1873,8 +1902,8 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (INVERSE_compressChroma == diagnosticMode)
     {
-        float3 tonemappedJMh = forwardTonescale(src, SOURCE_CONDITIONS);
-        output               = compressChroma(src, tonemappedJMh.x, INVERSE);
+        float3 JMh = inverseTonescale(src, SOURCE_CONDITIONS);
+        output     = compressChroma(src, JMh.x, INVERSE);
     }
     else if (INVERSE_JMh_to_XYZ == diagnosticMode)
     {
@@ -1882,7 +1911,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_limitingGamutCuspTable == diagnosticMode)
     {
-        const float  wrapped_hue = wrap_to_360(src.z);
+        const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
         const float4 cusp        = limitingCuspFromTable(pos, t);
@@ -1890,13 +1919,13 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_compressionGamutCuspTable == diagnosticMode)
     {
-        const float  wrapped_hue = wrap_to_360(src.z);
+        const float  wrapped_hue = wrap_hue(src.z);
         float2 cusp = compressionLimitsFromTable(wrapped_hue);
         output = float3(cusp.x, cusp.y, src.z);
     }
     else if (DEBUG_limitingGamutGammas == diagnosticMode)
     {
-        const float  wrapped_hue = wrap_to_360(src.z);
+        const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
         const float4 cuspEX      = limitingCuspEXFromTable(pos, t);
@@ -1904,7 +1933,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_reachGamutCuspTable == diagnosticMode)
     {
-        const float  wrapped_hue = wrap_to_360(src.z);
+        const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
         const float4 cusp        = limitingCuspFromTable(pos, t);
@@ -1956,7 +1985,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_limitingFocusJ == diagnosticMode)
     {
-        const float wrapped_hue = wrap_to_360(src.z);
+        const float wrapped_hue = wrap_hue(src.z);
 
         const int    pos = lookupLimitingCuspHue(wrapped_hue);
         const float  t   = limiting_lerp_fraction(wrapped_hue, pos);
@@ -1969,7 +1998,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_reachMConditions == diagnosticMode)
     {
-        const float wrapped_hue = wrap_to_360(src.z);
+        const float wrapped_hue = wrap_hue(src.z);
         const float sM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS);
         const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
         output = float3(sM, dM, wrapped_hue); 
