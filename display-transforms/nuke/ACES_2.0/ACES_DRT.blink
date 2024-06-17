@@ -942,20 +942,20 @@ local:
       D_RGB[stage] = XYZ_w_scaled.y / RGB_w;
     }
 
+    const float k    = 1.0f / (5.0f * _L_A + 1.0f);
+    const float k4   = k * k * k * k;
+    const float _F_L = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
+    F_L[stage]       = _F_L / nl_normalise;
+
     // Pre weight CAT16 matrix by D
-    DL_weights[stage] = weight_matrix_row(D_RGB[stage].x, CAT_CAT16, 0);
-    DM_weights[stage] = weight_matrix_row(D_RGB[stage].y, CAT_CAT16, 1);
-    DS_weights[stage] = weight_matrix_row(D_RGB[stage].z, CAT_CAT16, 2);
+    DL_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].x, CAT_CAT16, 0);
+    DM_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].y, CAT_CAT16, 1);
+    DS_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].z, CAT_CAT16, 2);
   
     const float3x3 tempmat = constuct_inverse_matrix(DL_weights[stage], DM_weights[stage], DS_weights[stage]);
     DL_weights_inv[stage] = extract_row(tempmat, 0);
     DM_weights_inv[stage] = extract_row(tempmat, 1);
     DS_weights_inv[stage] = extract_row(tempmat, 2);
-
-    const float k    = 1.0f / (5.0f * _L_A + 1.0f);
-    const float k4   = k * k * k * k;
-    const float _F_L = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
-    F_L[stage]       = _F_L / nl_normalise;
 
     // Prescale values
     surround[stage].y = surround[stage].y * compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
@@ -965,7 +965,7 @@ local:
     const float3 RGB_wc = D_RGB[stage] * RGB_w;
      // Needs to use original as we have not setup alternates at this point
      // Assumes White falls on the original curve
-    const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(RGB_wc, stage);
+    const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(F_L[stage] * RGB_wc);
     A_w[stage]          = dot(achromatic_w, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
@@ -1058,18 +1058,19 @@ local:
     return XYZ;
   }
 
-  float3 post_adaptation_non_linear_response_compression_forward(float3 RGB, int stage)
+  float3 post_adaptation_non_linear_response_compression_forward(float3 RGB)
   {
-    const float3 F_L_RGB = pow(F_L[stage] * fabs(RGB), float3(nl_gamma, nl_gamma, nl_gamma));
+    const float3 absRGB  = fabs(RGB);
+    const float3 F_L_RGB = pow(absRGB, float3(nl_gamma, nl_gamma, nl_gamma));
     const float3 RGB_c   = (sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
     return RGB_c;
   }
 
-  float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB, int stage)
+  float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB)
   {
-    const float3 absRGB = fabs(RGB);
-    const float3 RGB_p  = sign(RGB) / F_L[stage] * pow((nl_offset * absRGB) / (1.0 - absRGB), 
-                                                                      float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
+    const float3 absRGB  = fabs(RGB);
+    const float3 F_L_RGB = (nl_offset * absRGB) / (1.0 - absRGB);
+    const float3 RGB_p   = sign(RGB) * pow(F_L_RGB, float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
     return RGB_p;
   }
 
@@ -1153,7 +1154,7 @@ local:
     // # Step 3
     // # Applying forward post-adaptation non-linear response compression.
 
-    float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c, conditions);
+    float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c);
 
     // # Step 6 and Step 4
     // # Computing achromatic responses for the stimulus.
@@ -1227,7 +1228,7 @@ local:
 
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
-    const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a, conditions);
+    const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a);
 
     // # Step 6
     //const float3 RGB = RGB_c / D_RGB[conditions];
@@ -1709,7 +1710,7 @@ local:
   inline float Hellwig_J_to_Y(float J, int stage)
   {
     const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y); // TODO: can we eliminate the fabs and sign calls?
-    return sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma);
+    return sign(J) * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma) / F_L[stage];
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
