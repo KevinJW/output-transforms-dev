@@ -942,9 +942,10 @@ local:
     DM_weights_inv[stage] = extract_row(tempmat, 1);
     DS_weights_inv[stage] = extract_row(tempmat, 2);
 
-    const float k  = 1.0f / (5.0f * _L_A + 1.0f);
-    const float k4 = k * k * k * k;
-    F_L[stage]     = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
+    const float k    = 1.0f / (5.0f * _L_A + 1.0f);
+    const float k4   = k * k * k * k;
+    const float _F_L = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
+    F_L[stage]       = _F_L / nl_normalise;
 
     // Prescale values
     surround[stage].y = surround[stage].y * compute_base_exponential_nonlinearity(Y_b, XYZ_w_scaled.y);
@@ -958,7 +959,7 @@ local:
     A_w[stage]          = dot(achromatic_weights, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
-    const float F_L_W = pow(F_L[stage], nl_gamma);
+    const float F_L_W = pow(_F_L, nl_gamma);
     y_to_j_A_w[stage] = (F_L_W) / (nl_offset + F_L_W);
 
     // TODO check if this dot product reduction is good enough, check different white points
@@ -1038,7 +1039,7 @@ local:
 
   float3 post_adaptation_non_linear_response_compression_forward(float3 RGB, int stage)
   {
-    const float3 F_L_RGB = pow(F_L[stage] / nl_normalise * fabs(RGB), float3(nl_gamma, nl_gamma, nl_gamma));
+    const float3 F_L_RGB = pow(F_L[stage] * fabs(RGB), float3(nl_gamma, nl_gamma, nl_gamma));
     const float3 RGB_c   = (sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
     return RGB_c;
   }
@@ -1046,7 +1047,7 @@ local:
   float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB, int stage)
   {
     const float3 absRGB = fabs(RGB);
-    const float3 RGB_p  = sign(RGB) * nl_normalise / F_L[stage] * pow((nl_offset * absRGB) / (1.0 - absRGB), 
+    const float3 RGB_p  = sign(RGB) / F_L[stage] * pow((nl_offset * absRGB) / (1.0 - absRGB), 
                                                                       float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
     return RGB_p;
   }
@@ -1107,7 +1108,7 @@ local:
   //
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return sign(A) * j_scale * pow(fabs(A) / A_w[conditions], surround[conditions].y); // TODO J scale is not explicitly same nl_normalise factor
+    return sign(A) * j_scale * pow(fabs(A) / A_w[conditions], surround[conditions].y); // TODO make weights separate based on conditions, then factor in A_W
   }
 
   inline float Achromatic_from_J(float J, int conditions)
@@ -1160,7 +1161,7 @@ local:
     // # Step 9
     // # Computing the correlate of *colourfulness*
     const float et = eccentricity_factor(hr, false);
-    float       M  = surround[conditions].z * et * sqrt(a * a + b * b);
+    float       M  = surround[conditions].z * et * sqrt(a * a + b * b); // TODO: can we factor surround into A and b weights?
 
     if (J == 0.0f) // TODO: is this needed?
       M = 0.0f;
@@ -1680,14 +1681,14 @@ local:
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
   inline float Y_to_Hellwig_J(float Y, int stage)
   {
-    const float F_L_Y = pow(F_L[stage] * fabs(Y) / nl_normalise, nl_gamma);
+    const float F_L_Y = pow(F_L[stage] * fabs(Y), nl_gamma);
     return sign(Y) * j_scale * pow(((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
   }
 
   inline float Hellwig_J_to_Y(float J, int stage)
   {
     const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y);
-    return nl_normalise * sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
+    return sign(J) / F_L[stage] * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma); // TODO: remove nl_normalise scale ?
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
