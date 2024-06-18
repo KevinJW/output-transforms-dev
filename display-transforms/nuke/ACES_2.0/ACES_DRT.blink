@@ -1058,19 +1058,31 @@ local:
     return XYZ;
   }
 
-  float3 post_adaptation_non_linear_response_compression_forward(float3 RGB)
+  inline float3 _post_adaptation_non_linear_response_compression_forward(float3 RGB)
   {
-    const float3 absRGB  = fabs(RGB);
-    const float3 F_L_RGB = pow(absRGB, float3(nl_gamma, nl_gamma, nl_gamma));
-    const float3 RGB_c   = (sign(RGB) * F_L_RGB) / (nl_offset + F_L_RGB);
+    const float3 F_L_RGB = pow(RGB, float3(nl_gamma, nl_gamma, nl_gamma));
+    const float3 RGB_c   = F_L_RGB / (nl_offset + F_L_RGB);
     return RGB_c;
   }
 
-  float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB)
+  inline float3 _post_adaptation_non_linear_response_compression_inverse(float3 RGB)
+  {
+    const float3 F_L_RGB = (nl_offset * RGB) / (1.0 - RGB);
+    const float3 RGB_p   = pow(F_L_RGB, float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
+    return RGB_p;
+  }
+
+  inline float3 post_adaptation_non_linear_response_compression_forward(float3 RGB)
   {
     const float3 absRGB  = fabs(RGB);
-    const float3 F_L_RGB = (nl_offset * absRGB) / (1.0 - absRGB);
-    const float3 RGB_p   = sign(RGB) * pow(F_L_RGB, float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
+    const float3 RGB_c   = sign(RGB) * _post_adaptation_non_linear_response_compression_forward(absRGB);
+    return RGB_c;
+  }
+
+  inline float3 post_adaptation_non_linear_response_compression_inverse(float3 RGB)
+  {
+    const float3 absRGB  = fabs(RGB);
+    const float3 RGB_p   = sign(RGB) * _post_adaptation_non_linear_response_compression_inverse(absRGB);
     return RGB_p;
   }
 
@@ -1128,14 +1140,24 @@ local:
   //
   // - Custom primaries
   //
+  inline float _J_from_Achromatic(float A, int conditions)
+  {
+    return j_scale * pow(A, surround[conditions].y);
+  }
+
+  inline float _Achromatic_from_J(float J, int conditions)
+  {
+    return A_w[conditions] * pow(J / j_scale, 1.0f / surround[conditions].y); // TODO move A_w[conditions] to panlrcm
+  }
+
   inline float J_from_Achromatic(float A, int conditions)
   {
-    return sign(A) * j_scale * pow(fabs(A), surround[conditions].y);
+    return sign(A) * _J_from_Achromatic(fabs(A), conditions);
   }
 
   inline float Achromatic_from_J(float J, int conditions)
   {
-    return sign(J) * A_w[conditions] * pow(fabs(J) / j_scale, 1.0f / surround[conditions].y); // TODO move A_w[conditions] to panlrcm
+    return sign(J) * _Achromatic_from_J(fabs(J), conditions);
   }
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
@@ -1679,58 +1701,72 @@ local:
     aces_ts_s_2                = (aces_ts_w_2 * aces_ts_m_1) * referenceLuminance; // Factor in our reference
     aces_ts_u_2                = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + aces_ts_w_2), aces_ts_g);
     aces_ts_m_2                = aces_ts_m_1 / aces_ts_u_2;
-    aces_ts_inv_upper_limit    = aces_ts_n / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name
+    aces_ts_inv_upper_limit    = (aces_ts_n * aces_ts_n) / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name Is it even needed?
   }
 
   // ACES Tonescale function, proposed by Daniele Siragusano
   inline float aces_ts_fwd(float Y)
   {
-    Y       = max(0.0f, Y); // TODO: max needed?
+    // Assumes Y is >= +0.0
     float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
-    float h = max(0.0f, f * f / (f + aces_ts_t_1)); // TODO: max needed?
+    float h = max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
     return h * aces_ts_n;
   }
 
   inline float aces_ts_rev(float Y)
   {
-    Y       = Y / aces_ts_n;
-    Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
-    float h = (Y + sqrt(Y * (4.0f * aces_ts_t_1 + Y))) / 2.0f;
-    float f = aces_ts_s_2 / (pow((aces_ts_m_2 / h), (1.0f / aces_ts_g)) - 1.0f);
+    //Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
+    float h = Y / aces_ts_n;
+    float f = (h + sqrt(h * (4.0f * aces_ts_t_1 + h))) / 2.0f;
+    f       = aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
     return f;
   }
 
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
-  inline float Y_to_Hellwig_J(float Y, int stage)
+  inline float _Y_to_Hellwig_J(float Y, int conditions)
   {
-    const float F_L_Y = pow(F_L[stage] * fabs(Y), nl_gamma); // TODO: can we eliminate the fabs and sign calls?
-    return sign(Y) * j_scale * pow(((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[stage], surround[stage].y);
+    // Assumes Y is >= +0.0
+    const float F_L_Y = pow(F_L[conditions] * Y, nl_gamma);
+    const float A = ((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[conditions];
+    return _J_from_Achromatic(A, conditions);
   }
 
-  inline float Hellwig_J_to_Y(float J, int stage)
+  inline float _Hellwig_J_to_Y(float J, int conditions)
   {
-    const float A = y_to_j_A_w[stage] * pow(fabs(J) / j_scale, 1.0f / surround[stage].y); // TODO: can we eliminate the fabs and sign calls?
-    return sign(J) * pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma) / F_L[stage];
+    // Assumes J is >= +0.0
+    const float A = y_to_j_A_w[conditions] * pow(J / j_scale, 1.0f / surround[conditions].y);
+    return pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma) / F_L[conditions];
+  }
+
+  inline float Y_to_Hellwig_J(float Y, int conditions)
+  {
+    const float absY = fabs(Y);
+    return sign(Y) * _Y_to_Hellwig_J(absY, conditions);  // TODO: can we eliminate the fabs and sign calls?
+  }
+
+  inline float Hellwig_J_to_Y(float J, int conditions)
+  {
+    const float absJ = fabs(J);
+    return sign(J) * _Hellwig_J_to_Y(absJ, conditions); // TODO: can we eliminate the fabs and sign calls?
   }
 
   float3 forwardTonescale(float3 inputJMh, int conditions)
   {
-    float  linear        = Hellwig_J_to_Y(inputJMh.x, conditions);
-    float  luminanceTS   = aces_ts_fwd(linear);
-    float  tonemappedJ   = Y_to_Hellwig_J(luminanceTS, conditions);
-    float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
-
+    const float  inputJ        = inputJMh.x; //max(0.0f, inputJMh.x); // TODO still needed? does mean we can avoid calling sign and fabs calls below
+    const float  inputY        = _Hellwig_J_to_Y(inputJ, conditions);
+    const float  luminanceTS   = aces_ts_fwd(inputY);
+    const float  tonemappedJ   = _Y_to_Hellwig_J(luminanceTS, conditions);
+    const float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
     return tonemappedJMh;
   }
 
 float3 inverseTonescale(float3 JMh, int conditions)
   {
-    float3 untonemappedColourJMh = JMh;
-    float  luminance             = Hellwig_J_to_Y(untonemappedColourJMh.x, conditions);
-    float  linear                = aces_ts_rev(luminance);
-    untonemappedColourJMh.x      = Y_to_Hellwig_J(linear, conditions);
-
-    return untonemappedColourJMh;
+    const float  luminance       = _Hellwig_J_to_Y(JMh.x, conditions);
+    const float  linear          = aces_ts_rev(luminance);
+    const float  untonemappedJ   = _Y_to_Hellwig_J(linear, conditions);
+    const float3 untonemappedJMh = float3(untonemappedJ, JMh.y, JMh.z);
+    return untonemappedJMh;
   }
 
   // A "toe" function that remaps the given value x between 0 and limit.
