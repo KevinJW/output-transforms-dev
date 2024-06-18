@@ -160,6 +160,10 @@ local:
   float3 a_weights[NUMBER_CONDITIONS];
   float3 b_weights[NUMBER_CONDITIONS];
 
+  float3 achromatic_weights_inv[NUMBER_CONDITIONS];
+  float3 a_weights_inv[NUMBER_CONDITIONS];
+  float3 b_weights_inv[NUMBER_CONDITIONS];
+
   float3x3 panlrcm;
 
   float3x3 AP1_to_XYZ;
@@ -978,6 +982,11 @@ local:
     achromatic_weights[stage] = achromatic_w / A_w[stage];
     a_weights[stage]          = surround[stage].z * a_w;
     b_weights[stage]          = surround[stage].z * b_w;
+
+    const float3 column_weights = float3(A_w[stage], 1.0f / surround[stage].z, 1.0f / surround[stage].z);
+    achromatic_weights_inv[stage]   = extract_row(panlrcm, 0) * column_weights;
+    a_weights_inv[stage]            = extract_row(panlrcm, 1) * column_weights;
+    b_weights_inv[stage]            = extract_row(panlrcm, 2) * column_weights;
   }
 
   void init()
@@ -1052,7 +1061,7 @@ local:
     if (AP1Clamp)
     {
       float3 RGB = vector_dot(XYZ_to_AP1, XYZ);
-      RGB        = max(float3{0.0f}, RGB);
+      RGB        = max(float3{0.0f}, RGB); // TODO switch to clamp with an upper limit too
       XYZ        = vector_dot(AP1_to_XYZ, RGB);
     }
     return XYZ;
@@ -1147,7 +1156,7 @@ local:
 
   inline float _Achromatic_from_J(float J, int conditions)
   {
-    return A_w[conditions] * pow(J / j_scale, 1.0f / surround[conditions].y); // TODO move A_w[conditions] to panlrcm
+    return pow(J / j_scale, 1.0f / surround[conditions].y);
   }
 
   inline float J_from_Achromatic(float A, int conditions)
@@ -1231,22 +1240,27 @@ local:
     //}
 
     // # Computing achromatic response :math:`A` for the stimulus.
-    const float A = Achromatic_from_J(J, conditions);
+    const float _A = Achromatic_from_J(J, conditions);
 
     // # Computing *P_p_1* to *P_p_2*.
     //const float et    = eccentricity_factor(hr, false);
-    const float P_p_1 = surround[conditions].z; // * et;
-    const float P_p_2 = A;
+    //const float P_p_1 = surround[conditions].z; // * et;
+    //const float P_p_2 = A;
 
     // # Step 3
     // # Computing opponent colour dimensions
-    const float gamma = M / P_p_1;
+    const float gamma = M;
     const float a     = gamma * cos(hr);
     const float b     = gamma * sin(hr);
 
     // # Step 4
     // # Applying post-adaptation non-linear response compression matrix.
-    const float3 RGB_a = vector_dot(panlrcm, float3(P_p_2, a, b));
+    const float3 Aab = float3(_A, a, b);
+    //const float3 RGB_a = vector_dot(panlrcm, Aab);
+    float3 RGB_a;
+    RGB_a.x = dot(achromatic_weights_inv[conditions], Aab);
+    RGB_a.y = dot(a_weights_inv[conditions], Aab);
+    RGB_a.z = dot(b_weights_inv[conditions], Aab);
 
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
