@@ -179,7 +179,6 @@ local:
 #define nl_normalise 100.0f
 #define nl_scale     400.0f
 #define nl_offset    27.13f
-#define nl_d_scale   nl_gamma * nl_scale * nl_offset
 
 #define j_scale      100.0f
 
@@ -189,7 +188,6 @@ local:
   float3 D_RGB[NUMBER_CONDITIONS];
   float  A_w[NUMBER_CONDITIONS];
   float  y_to_j_A_w[NUMBER_CONDITIONS];
-  float  chromatic_adapt_scale[NUMBER_CONDITIONS];
 
 //#define USE_DEGREES
 #ifdef USE_DEGREES
@@ -951,11 +949,19 @@ local:
     const float _F_L = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
     F_L[stage]       = _F_L / nl_normalise;
 
+    // # FWd Step 1
+    // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
+    //float3 RGB = vector_dot(CAT_CAT16, XYZ);
+    //float3 RGB_c = D_RGB[conditions] * RGB; // combine with CAT16
+
     // Pre weight CAT16 matrix by D
     DL_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].x, CAT_CAT16, 0);
     DM_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].y, CAT_CAT16, 1);
     DS_weights[stage] = weight_matrix_row(F_L[stage] * D_RGB[stage].z, CAT_CAT16, 2);
-  
+
+    // # Inv Step 6
+    //const float3 RGB = RGB_c / D_RGB[conditions];
+    //const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
     const float3x3 tempmat = constuct_inverse_matrix(DL_weights[stage], DM_weights[stage], DS_weights[stage]);
     DL_weights_inv[stage] = extract_row(tempmat, 0);
     DM_weights_inv[stage] = extract_row(tempmat, 1);
@@ -973,11 +979,7 @@ local:
     A_w[stage]          = dot(achromatic_w, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
-    const float F_L_W = pow(_F_L, nl_gamma);
-    y_to_j_A_w[stage] = (F_L_W) / (nl_offset + F_L_W);
-
-    // TODO check if this dot product reduction is good enough, check different white points
-    chromatic_adapt_scale[stage] = CAT_CAT16[1][0] / D_RGB[stage].x + CAT_CAT16[1][1] / D_RGB[stage].y + CAT_CAT16[1][2] / D_RGB[stage].z;
+    y_to_j_A_w[stage] = _post_adaptation_non_linear_response_compression_forward(_F_L);
 
     achromatic_weights[stage] = achromatic_w / A_w[stage];
     a_weights[stage]          = surround[stage].z * a_w;
@@ -1067,11 +1069,22 @@ local:
     return XYZ;
   }
 
+  inline float _post_adaptation_non_linear_response_compression_forward(float L)
+  {
+    const float F_L_L = pow(L, float(nl_gamma));
+    return F_L_L / (nl_offset + F_L_L);
+  }
+
   inline float3 _post_adaptation_non_linear_response_compression_forward(float3 RGB)
   {
     const float3 F_L_RGB = pow(RGB, float3(nl_gamma, nl_gamma, nl_gamma));
-    const float3 RGB_c   = F_L_RGB / (nl_offset + F_L_RGB);
-    return RGB_c;
+    return F_L_RGB / (nl_offset + F_L_RGB);
+  }
+
+  inline float _post_adaptation_non_linear_response_compression_inverse(float A)
+  {
+    const float F_L_A = (nl_offset * A) / (1.0 - A);
+    return pow(F_L_A, 1.0f / nl_gamma);
   }
 
   inline float3 _post_adaptation_non_linear_response_compression_inverse(float3 RGB)
@@ -1171,26 +1184,12 @@ local:
 
   float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
   {
-    // # Step 1
-    // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
-    //float3 RGB = vector_dot(CAT_CAT16, XYZ);
-
-    // # Step 2
-    //float3 RGB_c = D_RGB[conditions] * RGB; // combine with CAT16
     float3 RGB_c;
     RGB_c.x = dot(DL_weights[conditions], XYZ);
     RGB_c.y = dot(DM_weights[conditions], XYZ);
     RGB_c.z = dot(DS_weights[conditions], XYZ);
 
-    // # Step 3
-    // # Applying forward post-adaptation non-linear response compression.
-
     float3 RGB_a = post_adaptation_non_linear_response_compression_forward(RGB_c);
-
-    // # Step 6 and Step 4
-    // # Computing achromatic responses for the stimulus.
-    // # Converting to preliminary cartesian coordinates.
-    // basically a 3x3 matrix
 
     const float A = dot(achromatic_weights[conditions], RGB_a);
     const float a = dot(a_weights[conditions], RGB_a);
@@ -1265,12 +1264,6 @@ local:
     // # Step 5
     // # Applying inverse post-adaptation non-linear response compression.
     const float3 RGB_c = post_adaptation_non_linear_response_compression_inverse(RGB_a);
-
-    // # Step 6
-    //const float3 RGB = RGB_c / D_RGB[conditions];
-
-    // # Step 7
-    //const float3 XYZ = vector_dot(CAT_CAT16_INVERSE, RGB);
 
     float3 XYZ;
     XYZ.x = dot(DL_weights_inv[conditions], RGB_c);
@@ -1740,16 +1733,15 @@ local:
   inline float _Y_to_Hellwig_J(float Y, int conditions)
   {
     // Assumes Y is >= +0.0
-    const float F_L_Y = pow(F_L[conditions] * Y, nl_gamma);
-    const float A = ((F_L_Y) / (nl_offset + F_L_Y)) / y_to_j_A_w[conditions];
+    const float A = _post_adaptation_non_linear_response_compression_forward(F_L[conditions] * Y) / y_to_j_A_w[conditions];
     return _J_from_Achromatic(A, conditions);
   }
 
   inline float _Hellwig_J_to_Y(float J, int conditions)
   {
     // Assumes J is >= +0.0
-    const float A = y_to_j_A_w[conditions] * pow(J / j_scale, 1.0f / surround[conditions].y);
-    return pow((nl_offset * A) / (1.0 - A), 1.0f / nl_gamma) / F_L[conditions];
+    const float A = y_to_j_A_w[conditions] * _Achromatic_from_J(J, conditions);
+    return _post_adaptation_non_linear_response_compression_inverse(A) / F_L[conditions];
   }
 
   inline float Y_to_Hellwig_J(float Y, int conditions)
