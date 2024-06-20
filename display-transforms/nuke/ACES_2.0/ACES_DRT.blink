@@ -101,8 +101,8 @@ param:
   float _focusDistanceScaling;
 
   // Gamut Compression Fuction Parameters
-  // Threshold / min Limit / max Limit / Power
-  float4 _compressionFuncParams;
+  // Threshold
+  float _compressionFuncParams;
 
   float2 LMS_rxy, LMS_gxy, LMS_bxy, LMS_wxy;
 
@@ -261,7 +261,7 @@ local:
     defineParam(_focusDistance, "Focus Distance", 1.35f);
     defineParam(_focusDistanceScaling, "Focus Distance Scaling", 1.75f);
 
-    defineParam(_compressionFuncParams, "Compression Function Parameters", float4(0.75f, 1.1f, 1.3f, 1.0f)); // TODO: do we use all of them?
+    defineParam(_compressionFuncParams, "Compression Function Parameters", 0.75f);
     defineParam(LMS_rxy, "LMS Red Primary", float2(0.8336f,  0.1735f));
     defineParam(LMS_gxy, "LMS Green Primary", float2(2.3854f, -1.4659f));
     defineParam(LMS_bxy, "LMS Blue Primary", float2(0.087f , -0.125f));
@@ -1413,53 +1413,6 @@ local:
     return lerp(limitingGamutCuspTableEX[pos - 1], limitingGamutCuspTableEX[pos], t);
   }
 
-  // "PowerP" compression function (also used in the ACES Reference Gamut Compression transform)
-  // values of v above  'threshold' are compressed by a 'power' function
-  // so that an input value of 'limit' results in an output of 1.0
-  float compressPowerP(float v, float threshold, float limit, float power, bool inverse)
-  {
-    float s = (limit - threshold) / pow(pow((1.0f - threshold) / (limit - threshold), -power) - 1.0f, 1.0f / power);
-
-    float vCompressed;
-
-    if (inverse)
-    {
-      vCompressed = (v < threshold || limit < 1.0001f || v > threshold + s)
-        ? v
-        : threshold + s * pow(-(pow((v - threshold) / s, power) / (pow((v - threshold) / s, power) - 1.0f)), 1.0f / power);
-    }
-    else
-    {
-      vCompressed = (v < threshold || limit < 1.0001f)
-        ? v
-        : threshold + s * ((v - threshold) / s) / (pow(1.0f + pow((v - threshold) / s, power), 1.0f / power));
-    }
-
-    return vCompressed;
-  }
-
- float compressUnityPowerP(float v, float threshold, float limit, bool inverse)
-  {
-    float s = (limit - threshold) / (((limit - threshold) / (1.0f - threshold)) - 1.0f);
-
-    float vCompressed;
-
-    if (inverse)
-    {
-      vCompressed = (v < threshold || limit < 1.0001f || v > threshold + s)
-        ? v
-        : threshold + s * (-(((v - threshold) / s) / (((v - threshold) / s) - 1.0f)));
-    }
-    else
-    {
-      vCompressed = (v < threshold || limit < 1.0001f)
-        ? v
-        : threshold + s * ((v - threshold) / s) / ((1.0f + ((v - threshold) / s)));
-    }
-
-    return vCompressed;
-  }
-
   // https://www.desmos.com/calculator/oe2fscya80
   inline float getFocusGain(float J, float limitJmax, float focusAdjustGain, float analytical_threshold)
   {
@@ -1540,54 +1493,18 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  inline float gamut_compress_alpha_orig(float initial, float limit, float maximum, bool direction) // TODO better name
+  inline float _gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
   {
-    const float difference = max(1.0001f, maximum / limit); // TODO: magic threshold? also in compressPowerP function needed here?
-    const float threshold  = max(_compressionFuncParams.x, 1.0f / difference);
-    float t                = initial / limit;
-    t                      = compressUnityPowerP(t, threshold, difference, direction);
-    return t;
-  }
-
-  inline float gamut_compress_alpha(float initial, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
-  {
-    float t               = initial / gamutBoundary;
-    const float locus     = max(1.0001f, locusMaximum / gamutBoundary); // TODO: magic threshold? also in compressPowerP function needed here?
-    const float threshold = max(_compressionFuncParams.x, 1.0f / locus);
+    const float threshold = max(_compressionFuncParams * gamutBoundary, gamutBoundary / locusMaximum);
 
     if (t < threshold)
       return t;
-    
-    const float scale  = (locus - threshold) / (((locus - threshold) / (1.0f - threshold)) - 1.0f);
-    const float factor = (t - threshold) / scale;
-
-    if (direction && factor > 1.0f)
-      return t;
-
-    if (direction)
-    {
-      t = threshold + scale * (-(factor / (factor - 1.0f)));
-    }
-    else
-    {
-      t = threshold + scale * (factor) / (1.0f + factor);
-    }
-
-    return t;
-  }
-
-  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
-  {
-    const float threshold = max(_compressionFuncParams.x * gamutBoundary, gamutBoundary / locusMaximum);
-
-    if (t < threshold)
-      return t / gamutBoundary;
     
     const float scale  = (locusMaximum - threshold) / (((locusMaximum - threshold) / (gamutBoundary - threshold)) - 1.0f);
     const float factor = (t - threshold) / scale;
 
     if (direction && factor > 1.0f)
-      return t / gamutBoundary;
+      return t;
 
     if (direction)
     {
@@ -1598,7 +1515,12 @@ local:
       t = threshold + scale * (factor) / (1.0f + factor);
     }
 
-    return t / gamutBoundary;
+    return t;
+  }
+
+  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction)
+  {
+    return _gamut_compress_nonlinear(t, gamutBoundary, locusMaximum, direction) / gamutBoundary; // normalise against the gamutBoundary
   }
 
   float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float slope_gain,
@@ -2045,20 +1967,6 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float sM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS);
         const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
         output = float3(sM, dM, wrapped_hue); 
-    }
-    else if (DEBUG_gamutCompressAlphaFORWARDS)
-    {
-        const float m1 = gamut_compress_alpha_orig(src.x, src.y, src.z, FORWARDS);
-        const float m2 = gamut_compress_alpha(src.x, src.y, src.z, FORWARDS);
-        const float m3 = gamut_compress_nonlinear(src.x, src.y, src.z, FORWARDS);
-        output = float3(m1, m2, m3); 
-    }
-    else if (DEBUG_gamutCompressAlphaINVERSE)
-    {
-        const float m1 = gamut_compress_alpha_orig(src.x, src.y, src.z, INVERSE);
-        const float m2 = gamut_compress_alpha(src.x, src.y, src.z, INVERSE);
-        const float m3 = gamut_compress_nonlinear(src.x, src.y, src.z, INVERSE);
-        output = float3(m1, m2, m3); 
     }
     else
     {
