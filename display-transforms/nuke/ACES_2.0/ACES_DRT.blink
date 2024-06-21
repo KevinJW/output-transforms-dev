@@ -1500,14 +1500,17 @@ local:
     if (t < threshold)
       return t;
 
-    const float reach_distance = reachBoundary - threshold;
-    const float scale  = (reach_distance) / (((reach_distance) / (gamutBoundary - threshold)) - 1.0f);
-    const float factor = (t - threshold) / scale;
+    const float reach_distance    = reachBoundary - threshold;
+    const float boundary_distance = gamutBoundary - threshold;
+    const float t_distance        = t - threshold;
 
-    if (direction && factor > 1.0f)
-      return t;
+    const float scale  = (reach_distance) / (((reach_distance) / (boundary_distance)) - 1.0f);
+    const float factor = t_distance / scale;
 
-    if (direction)
+    if (INVERSE == direction && factor >= 1.0f)
+      return scale + t;
+
+    if (INVERSE == direction)
     {
       t = threshold + scale * (-(factor / (factor - 1.0f)));
     }
