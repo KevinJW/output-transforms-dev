@@ -1310,7 +1310,7 @@ local:
     return a + t * (b - a);
   }
 
-  // Smooth minimum of a and b
+  // Smooth minimum of a and b (cubic polynomial)
   float smin(float a, float b, float s)
   {
     float h = max(s - fabs(a - b), 0.0f) / s;
@@ -1493,14 +1493,15 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  inline float _gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
+  inline float _gamut_compress_nonlinear(float t, const float gamutBoundary, const float reachBoundary, bool direction) // TODO better name
   {
-    const float threshold = max(_compressionFuncParams * gamutBoundary, gamutBoundary / locusMaximum);
+    const float threshold = max(_compressionFuncParams, gamutBoundary / reachBoundary) * gamutBoundary; // TODO: why max?
 
     if (t < threshold)
       return t;
-    
-    const float scale  = (locusMaximum - threshold) / (((locusMaximum - threshold) / (gamutBoundary - threshold)) - 1.0f);
+
+    const float reach_distance = reachBoundary - threshold;
+    const float scale  = (reach_distance) / (((reach_distance) / (gamutBoundary - threshold)) - 1.0f);
     const float factor = (t - threshold) / scale;
 
     if (direction && factor > 1.0f)
@@ -1518,9 +1519,9 @@ local:
     return t;
   }
 
-  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float locusMaximum, bool direction)
+  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float reachBoundary, bool direction)
   {
-    return _gamut_compress_nonlinear(t, gamutBoundary, locusMaximum, direction) / gamutBoundary; // normalise against the gamutBoundary
+    return _gamut_compress_nonlinear(t, gamutBoundary, reachBoundary, direction) / gamutBoundary; // normalise against the gamutBoundary
   }
 
   float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float slope_gain,
@@ -1532,10 +1533,10 @@ local:
     const float  J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float2 ganutBoundary    = findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, smoothness, estimated_hull_gammas, slope);
 
-    const float  locusMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
+    const float  reachMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
 
     // Compress the out of gamut color along the projection line
-    const float  t            = gamut_compress_nonlinear(JM.y, ganutBoundary.y, locusMax, direction);
+    const float  t            = gamut_compress_nonlinear(JM.y, ganutBoundary.y, reachMax, direction);
     const float2 project_to   = float2(intersectJ, 0.0f);
     const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
     return JMcompressed;
