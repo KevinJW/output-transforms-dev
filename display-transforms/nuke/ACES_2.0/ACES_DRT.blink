@@ -1493,38 +1493,46 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  inline float _gamut_compress_nonlinear(float t, const float gamutBoundary, const float reachBoundary, bool direction) // TODO better name
+  inline float reinhard_compress(const float location, const float boundary_distance, const float reach_distance, bool direction)
   {
-    const float threshold = max(_compressionFuncParams, gamutBoundary / reachBoundary) * gamutBoundary; // TODO: why max?
-
-    if (t < threshold)
-      return t;
-
-    const float reach_distance    = reachBoundary - threshold;
-    const float boundary_distance = gamutBoundary - threshold;
-    const float t_distance        = t - threshold;
-
+    // Assumes boundary_distance != reach_distance
+    // Generaly speaking boundary should be < reach
     const float scale  = (reach_distance) / (((reach_distance) / (boundary_distance)) - 1.0f);
-    const float factor = t_distance / scale;
-
-    if (INVERSE == direction && factor >= 1.0f)
-      return scale + t;
+    const float factor = location / scale;
 
     if (INVERSE == direction)
     {
-      t = threshold + scale * (-(factor / (factor - 1.0f)));
+      if (factor >= 1.0f)
+        return scale;
+      else
+        return scale * (-(factor / (factor - 1.0f)));
     }
-    else
-    {
-      t = threshold + scale * (factor) / (1.0f + factor);
-    }
-
-    return t;
+    return scale * (factor) / (1.0f + factor);
   }
 
-  inline float gamut_compress_nonlinear(float t, const float gamutBoundary, const float reachBoundary, bool direction)
+  inline float _gamut_mapped_location(float location, const float gamutBoundary, const float reachBoundary, bool direction)
   {
-    return _gamut_compress_nonlinear(t, gamutBoundary, reachBoundary, direction) / gamutBoundary; // normalise against the gamutBoundary
+    // Assumes _compressionFuncParams in [0.0, 1.0]
+    const float threshold = max(_compressionFuncParams, gamutBoundary / reachBoundary) * gamutBoundary;
+
+    // Values upto the threshold or when both boundaries are the same remain as is
+    if (location <= threshold || threshold == 1.0f)
+      return location;
+
+    // Translate to place threshold at zero
+    const float location_offset = location - threshold;
+    const float boundary_offset = gamutBoundary - threshold;
+    const float reach_offset    = reachBoundary - threshold;
+
+    const float relative_location = reinhard_compress(location_offset, boundary_offset, reach_offset, direction);
+
+    return threshold + relative_location; // shift back to absolute
+  }
+
+  inline float gamut_mapped_location(float location, const float gamutBoundary, const float reachBoundary, bool direction)
+  {
+    const float line_location = _gamut_mapped_location(location, gamutBoundary, reachBoundary, direction);
+    return line_location / gamutBoundary; // normalise against the gamutBoundary
   }
 
   float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float slope_gain,
@@ -1539,7 +1547,7 @@ local:
     const float  reachMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
 
     // Compress the out of gamut color along the projection line
-    const float  t            = gamut_compress_nonlinear(JM.y, ganutBoundary.y, reachMax, direction);
+    const float  t            = gamut_mapped_location(JM.y, ganutBoundary.y, reachMax, direction);
     const float2 project_to   = float2(intersectJ, 0.0f);
     const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
     return JMcompressed;
