@@ -534,7 +534,7 @@ local:
 
   void init_gamut_mapper(float log_peak)
   {
-    clamped_smoothness  = max(0.000001f, _smoothCusps);
+    clamped_smoothness  = max(0.000001f, _smoothCusps); // TODO: max() needed because smin() would have a divide by zero?
     smooth_cusp_scale = 1.0f + _smoothOffset * clamped_smoothness;
 
     _focusDist = _focusDistance + _focusDistance * _focusDistanceScaling * log_peak;;    
@@ -1063,7 +1063,7 @@ local:
     if (AP1Clamp)
     {
       float3 RGB = vector_dot(XYZ_to_AP1, XYZ);
-      RGB        = max(float3{0.0f}, RGB); // TODO switch to clamp with an upper limit too
+      RGB        = clamp(RGB, float3{0.0f}, float3(16384.0f)); // limit to nice power of 2 above that needed to max out a 10000 Nit output transform
       XYZ        = vector_dot(AP1_to_XYZ, RGB);
     }
     return XYZ;
@@ -1416,10 +1416,12 @@ local:
   // https://www.desmos.com/calculator/oe2fscya80
   inline float getFocusGain(float J, float limitJmax, float focusAdjustGain, float analytical_threshold)
   {
+    // Assume J (0.0, limitJmax)
+    
     if (J <= analytical_threshold)
-      return 1.0f; // Analytic inverse possible below cusp
+      return 1.0f; // makes the analytic inverse possible below cusp
 
-    // Approximate inverse required above threshold // TODO
+    // Approximate inverse required above threshold TODO: explain why
     float gain = (limitJmax - analytical_threshold) / max(0.0001f, (limitJmax - min(limitJmax, J)));
     return pow(log10(gain), 1.0f / focusAdjustGain) + 1.0f;
    }
@@ -1543,6 +1545,11 @@ local:
     const float  slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float  J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float2 ganutBoundary    = findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, smoothness, estimated_hull_gammas, slope);
+
+    if (ganutBoundary.y <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location
+    {
+      return float2(Jx, 0.0f);
+    }
 
     const float  reachMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
 
