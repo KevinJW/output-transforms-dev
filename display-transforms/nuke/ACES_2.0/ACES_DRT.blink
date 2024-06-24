@@ -1038,11 +1038,11 @@ local:
 
   inline float wrap_hue(float hue)
   {
-    float y = fmod(hue, hue_limit);
-    if (y < 0.0)
-    {
-      y = y + hue_limit;
-    }
+    float y = fmod(hue + hue_limit, hue_limit);
+    //if (y < 0.0)
+    //{
+    //  y = y + hue_limit;
+    //}
     return y;
   }
 
@@ -1495,13 +1495,8 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  inline float reinhard_compress(const float location, const float boundary_distance, const float reach_distance, bool direction)
+  inline float reinhard_compress(const float location, const float scale, const float factor, bool direction)
   {
-    // Assumes boundary_distance != reach_distance
-    // Generaly speaking boundary should be < reach
-    const float scale  = (reach_distance) / (((reach_distance) / (boundary_distance)) - 1.0f);
-    const float factor = location / scale;
-
     if (INVERSE == direction)
     {
       if (factor >= 1.0f)
@@ -1526,7 +1521,12 @@ local:
     const float boundary_offset = gamutBoundary - threshold;
     const float reach_offset    = reachBoundary - threshold;
 
-    const float relative_location = reinhard_compress(location_offset, boundary_offset, reach_offset, direction);
+    // Assumes boundary_offset != reach_offset
+    // Generaly speaking boundary should be < reach
+    const float scale  = (reach_offset) / ((reach_offset / boundary_offset) - 1.0f); // TODO; check 1.0 vs gamutBoundary
+    const float factor = location / scale;
+
+    const float relative_location = reinhard_compress(location_offset, scale, factor, direction);
 
     return threshold + relative_location; // shift back to absolute
   }
@@ -1545,8 +1545,8 @@ local:
     const float  slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float  J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float2 ganutBoundary    = findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, smoothness, estimated_hull_gammas, slope);
-
-    if (ganutBoundary.y <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location
+    //return float2(J_intersect_cusp, ganutBoundary.y);
+    if (ganutBoundary.y <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
     {
       return float2(Jx, 0.0f);
     }
