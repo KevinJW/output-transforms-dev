@@ -647,8 +647,9 @@ local:
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
-      table[i][FOCUS_J]   = compute_focusJ(cusp_table[i].x, _midJ, _cuspMidBlend, _limitJmax);
-      table[i][THRESHOLD] = lerp(cusp_table[i].x, _limitJmax, _focusGainBlend);
+      const float cuspJ   = cusp_table[i].x;
+      table[i][FOCUS_J]   = compute_focusJ(cuspJ, _midJ, _cuspMidBlend, _limitJmax);
+      table[i][THRESHOLD] = analytical_threshold(cuspJ);
     }
   }
 
@@ -1655,7 +1656,12 @@ local:
     return lerp(J, midJ, min(1.0f, cuspMidBlend - (J / limitJmax)));
   }
 
-  float3 gamutMapper(float3 JMh, bool direction)
+  inline float analytical_threshold(float cuspJ)
+  {
+    return lerp(cuspJ, _limitJmax, _focusGainBlend);
+  }
+
+  float3 gamutMapper(float3 JMh, const int pos, const float t, bool direction)
   {
     // Limit to +ve values // TODO test this is neededS
     if (JMh.x <= 0.0f)
@@ -1675,8 +1681,6 @@ local:
 
     // Assumes 'h' component is wrapped [0.0, hue_limit)
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
-    const int    pos                   = lookupLimitingCuspHue(JMh[HUE]);
-    const float  t                     = limiting_lerp_fraction(JMh[HUE], pos);
     const float4 cusp                  = limitingCuspFromTable(pos, t);
     const float4 cuspEX                = limitingCuspEXFromTable(pos, t);
     const float2 JMcusp                = float2(cusp.x, cusp.y);
@@ -1909,7 +1913,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
      if (invert)
       {
         gamutMappedJMh = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
-        compressedJMh  = gamutMapper(gamutMappedJMh, INVERSE);
+        const int    pos = lookupLimitingCuspHue(JMh[HUE]);
+        const float  t   = limiting_lerp_fraction(JMh[HUE], pos);
+        compressedJMh  = gamutMapper(gamutMappedJMh, pos, t, INVERSE);
         tonemappedJMh  = inverseTonescale(compressedJMh, SOURCE_CONDITIONS);
         JMh            = compressChroma(compressedJMh, tonemappedJMh.x, INVERSE);
         output         = JMh_to_XYZ(JMh, SOURCE_CONDITIONS);
@@ -1918,9 +1924,11 @@ float3 inverseTonescale(float3 JMh, int conditions)
       {
         float3 clamped = clamp_to_AP1(src);
         JMh            = XYZ_to_JMh(clamped, SOURCE_CONDITIONS);
+        const int    pos = lookupLimitingCuspHue(JMh[HUE]);
+        const float  t   = limiting_lerp_fraction(JMh[HUE], pos);
         tonemappedJMh  = forwardTonescale(JMh, SOURCE_CONDITIONS);
         compressedJMh  = compressChroma(tonemappedJMh, JMh.x, FORWARDS);
-        gamutMappedJMh = gamutMapper(compressedJMh, FORWARDS);
+        gamutMappedJMh = gamutMapper(compressedJMh, pos, t, FORWARDS);
         output         = JMh_to_XYZ(gamutMappedJMh, DISPLAY_CONDITIONS);
       }
     return output;
@@ -1956,7 +1964,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (FORWARDS_gamutMapper == diagnosticMode)
     {
-        output = gamutMapper(src, FORWARDS);
+        const int    pos = lookupLimitingCuspHue(src[HUE]);
+        const float  t   = limiting_lerp_fraction(src[HUE], pos);
+        output = gamutMapper(src, pos, t, FORWARDS);
     }
     else if (FORWARDS_JMh_to_XYZ == diagnosticMode)
     {
@@ -1968,7 +1978,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (INVERSE_gamutMapper == diagnosticMode)
     {
-        output = gamutMapper(src, INVERSE);
+        const int    pos = lookupLimitingCuspHue(src[HUE]);
+        const float  t   = limiting_lerp_fraction(src[HUE], pos);
+        output = gamutMapper(src, pos, t, INVERSE);
     }
     else if (INVERSE_inverseTonescale == diagnosticMode)
     {
@@ -2011,7 +2023,8 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
         const float4 cusp        = limitingCuspFromTable(pos, t);
-        output = float3(_limitJmax, cusp[REACHM], src.z);
+        const float2 limits      = compressionLimitsFromTable(wrapped_hue);
+        output = float3(limits.x, cusp[REACHM], limits.y);
     }
     else if (DEBUG_limitingGamutCuspTableRaw == diagnosticMode)
     {
