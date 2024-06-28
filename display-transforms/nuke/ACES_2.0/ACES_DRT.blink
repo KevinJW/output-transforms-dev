@@ -206,6 +206,7 @@ local:
 #define gammaSearchStep 0.2f
 
   // Non-uniform in h
+  float  hueTable[totalTableSize];
   float4 limitingGamutCuspTable[totalTableSize];    // { J, M, hue, reachM }
   float4 limitingGamutCuspTableEX[totalTableSize];  // { Upper gamma, Lower gamma, focusJ, analytical_threshold }
   float4 compressionGamutCuspTable[totalTableSize]; // { J, M, hue, reach boundary M / normM}
@@ -634,12 +635,24 @@ local:
     }
   }
 
-  void smooth_table(float4 * table, const int tableSize, float2 scale)
+  void extract_hue_table(float4 * table, float * hueTable)
   {
-    for (int i = 0; i < tableSize; ++i)
+    for (int i = 0; i < totalTableSize; ++i)
     {
+      hueTable[i] = table[i][HUE];
+    }
+  }
+
+  void setup_cusp_table(float4 * table, float2 scale, const float limitJ, const float3x3& matrix, const int conditions)
+  {
+    for (int i = 0; i < totalTableSize; ++i)
+    {
+      const float hue = hueTable[i];
       table[i].x = table[i].x * scale.x;
       table[i].y = table[i].y * scale.y;
+      //table[i].z = find_reach_cuspM(hue, limitJ, matrix, conditions);
+      table[i][REACHM] = find_reach_boundaryM(hue, limitJ, matrix, 1e-4, conditions);
+
     }
   }
 
@@ -651,6 +664,11 @@ local:
       table[i][FOCUS_J]   = compute_focusJ(cuspJ, _midJ, _cuspMidBlend, _limitJmax);
       table[i][THRESHOLD] = analytical_threshold(cuspJ);
     }
+  }
+
+  float find_reach_cuspM(float hue, const float limitJ, const float3x3& matrix, const float threshold, const int conditions)
+  {
+
   }
 
   float find_reach_boundaryM(float hue, const float limitJ, const float3x3& matrix, const float threshold, const int conditions)
@@ -774,7 +792,7 @@ local:
       const float4 cusp   = limitingGamutCuspTable[i];
       const float4 cuspEX = limitingGamutCuspTableEX[i];
       const float2 JMcusp = float2(cusp.x, cusp.y);
-      const float  hue    = cusp[HUE];
+      const float  hue    = hueTable[HUE];
       const float analytical_threshold = cuspEX[THRESHOLD];
       const float focusJ               = cuspEX[FOCUS_J];
 
@@ -856,7 +874,7 @@ local:
       const float4 cusp   = limitingGamutCuspTable[i];
       const float4 cuspEX = limitingGamutCuspTableEX[i];
       const float2 JMcusp = float2(cusp.x, cusp.y);
-      const float  hue    = cusp[HUE];
+      const float  hue    = hueTable[HUE];
       const float analytical_threshold = cuspEX[THRESHOLD];
       const float focusJ               = cuspEX[FOCUS_J];
 
@@ -928,9 +946,9 @@ local:
     if (upper == totalTableSize)
       return -2.0f; // Give up nothing above us
 
-    float lower_hue = limitingGamutCuspTable[lower][HUE];
-    float upper_hue = limitingGamutCuspTable[upper][HUE];
-    float entry_hue = limitingGamutCuspTable[entry][HUE];
+    float lower_hue = hueTable[lower];
+    float upper_hue = hueTable[upper];
+    float entry_hue = hueTable[entry];
     float lerp_loc = (entry_hue - lower_hue) / (upper_hue - lower_hue);
     return lerp(table[lower][channel], table[upper][channel], lerp_loc);
   }
@@ -1075,8 +1093,8 @@ local:
     normalise_compression_reach(compressionGamutCuspTable, totalTableSize);
 
     initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
-    initialise_reach_cusp_table(limitingGamutCuspTable, totalTableSize, _limitJmax, XYZ_to_AP1, SOURCE_CONDITIONS); // TODO: is the reach gamut supposed to be DISPLAY?
-    smooth_table(limitingGamutCuspTable, totalTableSize, smooth_cusp_scale);
+    extract_hue_table(limitingGamutCuspTable, hueTable);
+    setup_cusp_table(limitingGamutCuspTable, smooth_cusp_scale, _limitJmax, XYZ_to_AP1, SOURCE_CONDITIONS);
     precompute_intersections(limitingGamutCuspTable, limitingGamutCuspTableEX);
     initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
     initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
@@ -1414,7 +1432,7 @@ local:
 
     while (low_i + 1 < high_i)
     {
-      if (wrapped_hue > limitingGamutCuspTable[i][HUE])
+      if (wrapped_hue > hueTable[i])
       {
         low_i = i;
       }
@@ -1429,8 +1447,8 @@ local:
 
   float limiting_lerp_fraction(float wrapped_hue, int pos)
   {
-    return (wrapped_hue - limitingGamutCuspTable[pos - 1][HUE])
-                     / (limitingGamutCuspTable[pos][HUE] - limitingGamutCuspTable[pos - 1][HUE]);
+    return (wrapped_hue - hueTable[pos - 1])
+          / (hueTable[pos] - hueTable[pos - 1]);
   }
 
   float4 limitingCuspFromTable(int pos, float t)
