@@ -73,8 +73,8 @@ param:
 
 #define DEBUG_limitingGamutCuspTableRaw 60
 #define DEBUG_limitingGamutCuspTableRaw2 61
-#define DEBUG_limitingGamutCuspTableEXRaw 62
-#define DEBUG_limitingGamutCuspTableEXRaw2 63
+#define DEBUG_reachMTableRaw 62
+
 
 #define DEBUG_Jconstants 70
 #define DEBUG_FocusConstants 71
@@ -198,21 +198,21 @@ local:
 #define baseIndex 1            // array index for smallest hue, not necessarily actually a 0.0 hue angle
 
 #define gammaAccuracy 5e-6
-#define gammaMinimum 0.6f
+#define gammaMinimum 0.4f
 #define gammaMaximum 2.0f
 #define gammaSearchStep 0.2f
 
   // Non-uniform in h
   float  hueTable[totalTableSize];
-  float4 limitingGamutCuspTable[totalTableSize];    // { J, M, reachCuspM, reachM }
-  float4 limitingGamutCuspTableEX[totalTableSize];  // { Upper gamma, Lower gamma, focusJ, analytical_threshold }
+  float4 limitingGamutCuspTable[totalTableSize];    // { J, M, Upper gamma, Lower gamma }
+  float2 reachMTable[totalTableSize];               // { reachCuspM, reachM }
 
-#define HUE 2
-#define REACHCUSPM 2
-#define REACHM 3
+// Note reuse of Hue channel 2
+#define UPPER_GAMMA 2
+#define LOWER_GAMMA 3
 
-#define UPPER_GAMMA 0
-#define LOWER_GAMMA 1
+#define REACHCUSPM 0
+#define REACHM 1
 
   float3 inputWhite;
   float3 limitWhite;
@@ -604,8 +604,8 @@ local:
       const float  hNorm   = float(i) / (table_size);
       const float3 RGB     = HSV_to_RGB(float3(hNorm, 1.0f, 1.0f)) * float3(luminance);
       const float3 cusp    = linear_RGB_to_JMh(RGB, matrix, conditions);
-      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp[HUE], 0.0f);
-      if (tempTableUnsorted[i][HUE] < tempTableUnsorted[minhIndex][HUE])
+      tempTableUnsorted[i] = float4(cusp.x, cusp.y, cusp.z, 0.0f);
+      if (tempTableUnsorted[i].z < tempTableUnsorted[minhIndex].z)
       {
         minhIndex = i;
       }
@@ -617,8 +617,8 @@ local:
     output_table[baseIndex + gamutCuspTableSize] = output_table[baseIndex];
 
     // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, hue_limit)
-    output_table[0][HUE] = output_table[0][HUE] - hue_limit;
-    output_table[baseIndex + gamutCuspTableSize][HUE] = output_table[baseIndex + gamutCuspTableSize][HUE] + hue_limit;
+    output_table[0].z = output_table[0].z - hue_limit;
+    output_table[baseIndex + gamutCuspTableSize].z = output_table[baseIndex + gamutCuspTableSize].z + hue_limit;
   }
 
   void copy_table_rotated(float4 * tableUnsorted, const int tableSize, float4 output_table[], const int offsetIndex, const int baseOffset)
@@ -633,19 +633,28 @@ local:
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
-      hueTable[i] = table[i][HUE];
+      hueTable[i] = table[i].z;
     }
   }
 
-  void setup_cusp_table(float4 * table, float4 * reach_table, float2 scale, const float limitJ, const float3x3& xyz_matrix, const float3x3& rgb_matrix, const int conditions)
+  void smooth_cusp_table(float4 * table, float2 scale)
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
       const float hue = hueTable[i];
       table[i].x           = table[i].x * scale.x;
       table[i].y           = table[i].y * scale.y;
-      table[i][REACHCUSPM] = compressionCuspFromTable(hue, reach_table).y; // Resample compression cusp for Disply hues save on extra binary search 
-      table[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
+    }
+  }
+
+  void precompute_reach_table(float2 * reachMTable, float4 * reach_table, const float limitJ, const float3x3& xyz_matrix, const float3x3& rgb_matrix, const int conditions)
+  {
+    for (int i = 0; i < totalTableSize; ++i)
+    {
+      const float hue = hueTable[i];
+
+      reachMTable[i][REACHCUSPM] = compressionCuspFromTable(hue, reach_table).y; // Resample compression cusp for Disply hues save on extra binary search 
+      reachMTable[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
     }
   }
 
@@ -682,23 +691,6 @@ local:
     return high;
   }
 
-  void normalise_compression_reach(float4 * table, const int table_size)
-  {
-    for (int i = 0; i < table_size; ++i)
-    {
-      table[i][REACHM] = table[i][REACHM] / table[i].y;
-    }
-  }
-
-  void initialise_reach_cusp_table(float4 * table, const int table_size, const float limitJ, const float3x3& matrix, const int conditions)
-  {
-    for (int i = 0; i < table_size; ++i)
-    {
-      const float hue = table[i][HUE];
-      table[i][REACHM] = find_reach_boundaryM(hue, limitJ, matrix, 1e-4, conditions);
-    }
-  }
-
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
   {
     if (newLimitRGB.x < 0.0f || newLimitRGB.y < 0.0f || newLimitRGB.z < 0.0f ||
@@ -709,29 +701,32 @@ local:
     return false;
   }
 
-  float3 compute_test_location(const float2 JMcusp, float3 testJmh, const float limitJmax, const float base_slope,  const float focusJ,
-                               const float analytical_threshold, const float focusAdjustGain, const float2 estimated_hull_gammas, const int conditions)
+  float3 compute_test_location(const float2 JMcusp, float3 testJmh, const float limitJmax, const float base_slope,  const float midJ,
+                               const float cuspMidBlend, const float focusAdjustGain, const float2 estimated_hull_gammas, const int conditions)
   {
-    const float slope_gain       = base_slope * getFocusGain(testJmh.x, limitJmax, focusAdjustGain, analytical_threshold);
+    const float focusJ               = compute_focusJ(JMcusp.x, midJ, _cuspMidBlend, limitJmax);
+    const float analytical_threshold = compute_analytical_threshold(JMcusp.x);
+    const float slope_gain           = compute_slope_gain(testJmh.x, base_slope, limitJmax, focusAdjustGain, analytical_threshold);
+
     const float intersectJ       = solve_J_intersect(float2(testJmh.x, testJmh.y), focusJ, limitJmax, slope_gain);
     const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float2 approxLimit =
         findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
-    const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh[HUE]);
+    const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh.z);
     const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
     return newLimitRGB;
   }
 
   bool evaluate_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float2 estimated_hull_gammas,
-                                     const float limitJmax, const float base_slope, const float focusJ,
-                                     const float analytical_threshold, const float focusAdjustGain,
+                                     const float limitJmax, const float base_slope, const float midJ,
+                                     const float cuspMidBlend, const float focusAdjustGain,
                                      const float luminance, const int conditions)
   {
     for (int testIndex = 0; testIndex < test_count; ++testIndex)
     {
       const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope,
-                                                       focusJ, analytical_threshold, focusAdjustGain, estimated_hull_gammas, conditions);
+                                                       midJ, cuspMidBlend, focusAdjustGain, estimated_hull_gammas, conditions);
 
       if (!outside_hull(newLimitRGB, luminance))
       {
@@ -741,7 +736,7 @@ local:
     return true;
   }
 
-  void initialise_upper_hull_gamma(const float midJ, const float cuspMidBlend, const float limitJmax,
+  void initialise_upper_hull_gamma(float4 * table, const float midJ, const float cuspMidBlend, const float limitJmax,
                                    const float base_slope, const float focusAdjustGain,
                                    const float luminance, const int conditions)
   {
@@ -758,22 +753,19 @@ local:
     const float fixed_gamma = 1.0f / upperHullGamma;
     for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
     {
+      table[i][UPPER_GAMMA] = -1.0f;
       if (disableUpperHullGamma)
       {
-        limitingGamutCuspTableEX[i][UPPER_GAMMA] = fixed_gamma;
+        table[i][UPPER_GAMMA] = fixed_gamma;
         continue;
       }
 
       //  default value. This will get overridden as we loop, but can be a good diagnostic to make sure things are working
-      limitingGamutCuspTableEX[i][UPPER_GAMMA]    = -1.0f;
-      const float4 cusp   = limitingGamutCuspTable[i];
-      const float4 cuspEX = limitingGamutCuspTableEX[i];
-      const float2 JMcusp = float2(cusp.x, cusp.y);
-      const float  hue    = hueTable[HUE];
-      const float analytical_threshold = compute_analytical_threshold(JMcusp.x);
-      const float focusJ               = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
+      const float  hue                 = hueTable[i];
+      const float4 cusp                = table[i];
+      const float2 JMcusp              = float2(cusp.x, cusp.y);
 
-      float3       testJmh[test_count];
+      float3 testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
       {
         // create test values between the cusp and the Jmax
@@ -789,7 +781,7 @@ local:
       {
         const float2 estimated_hull_gammas = float2(high, 1.0f / lowerHullGamma);
         all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, focusJ, analytical_threshold, focusAdjustGain,
+                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
                                              luminance, conditions);
         if (all_inside)
         {
@@ -804,7 +796,7 @@ local:
         testGamma  = midpoint(low, high);
         const float2 estimated_hull_gammas = float2(testGamma, 1.0f / lowerHullGamma);
         all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, focusJ, analytical_threshold, focusAdjustGain,
+                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
                                              luminance, conditions);
         if (!all_inside)
         {
@@ -815,11 +807,11 @@ local:
           low = testGamma;
         }
       }
-      limitingGamutCuspTableEX[i][UPPER_GAMMA] = testGamma;
+      table[i][UPPER_GAMMA] = testGamma;
     }
     // Wrap the end entries
-    limitingGamutCuspTableEX[0] = limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize - 1];
-    limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize] = limitingGamutCuspTableEX[baseIndex];
+    table[0] = table[baseIndex + gamutCuspTableSize - 1];
+    table[baseIndex + gamutCuspTableSize] = table[baseIndex];
   }
 
   inline bool any_below_zero(const float3 newLimitRGB)
@@ -831,7 +823,7 @@ local:
     return false;
   }
 
-  void initialise_lower_hull_gamma(const float midJ, const float cuspMidBlend, const float limitJmax,
+  void initialise_lower_hull_gamma(float4 * table, const float midJ, const float cuspMidBlend, const float limitJmax,
                                    const float base_slope, const float focusAdjustGain,
                                    const float luminance, const int conditions)
   {
@@ -843,17 +835,14 @@ local:
     {
       if (disableLowerHullGamma)
       {
-        limitingGamutCuspTableEX[i][LOWER_GAMMA] = fixed_gamma;
+        table[i][LOWER_GAMMA] = fixed_gamma;
         continue;
       }
 
-      limitingGamutCuspTableEX[i][LOWER_GAMMA]    = -5.0f;
-      const float4 cusp   = limitingGamutCuspTable[i];
-      const float4 cuspEX = limitingGamutCuspTableEX[i];
+      table[i][LOWER_GAMMA]    = -5.0f;
+      const float4 cusp   = table[i];
       const float2 JMcusp = float2(cusp.x, cusp.y);
-      const float  hue    = hueTable[HUE];
-      const float analytical_threshold = compute_analytical_threshold(JMcusp.x);
-      const float focusJ               = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
+      const float  hue    = hueTable[i];
 
       float3       testJmh[test_count];
       for (int testIndex = 0; testIndex < test_count; ++testIndex)
@@ -869,8 +858,9 @@ local:
       while (all_inside && high < gammaMaximum)
       {
         const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, high);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, focusJ,
-                                             analytical_threshold, focusAdjustGain, luminance, conditions);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                             luminance, conditions);
         if (all_inside)
         {
           low  = high;
@@ -883,8 +873,9 @@ local:
       {
         testGamma  = midpoint(low, high);
         const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, testGamma);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, focusJ,
-                                             analytical_threshold, focusAdjustGain, luminance, conditions);
+        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                             luminance, conditions);
         if (!all_inside)
         {
           high = testGamma;
@@ -894,10 +885,10 @@ local:
           low = testGamma;
         }
       }
-      limitingGamutCuspTableEX[i][LOWER_GAMMA] = testGamma;
+      table[i][LOWER_GAMMA] = testGamma;
     }
-    limitingGamutCuspTableEX[0] = limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize - 1];
-    limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize] = limitingGamutCuspTableEX[baseIndex];
+    table[0] = table[baseIndex + gamutCuspTableSize - 1];
+    table[baseIndex + gamutCuspTableSize] = table[baseIndex];
   }
 
   float replace_gamma_entry(float4 * table, int entry, int channel)
@@ -935,20 +926,20 @@ local:
     return ((value <= 0.0f) || (value <= gammaMinimum+1e-2) || (value >= gammaMaximum-1e-2));
   }
 
-  void repair_broken_gamma_values(void)
+  void repair_broken_gamma_values(float4 * table)
   {
     for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
     {
       for (int channel = UPPER_GAMMA; channel <= LOWER_GAMMA; ++channel)
       {
-        if (bad_gamma_value(limitingGamutCuspTableEX[i][channel]))
+        if (bad_gamma_value(table[i][channel]))
         {
-          limitingGamutCuspTableEX[i][channel] = replace_gamma_entry(limitingGamutCuspTableEX, i, channel);
+          table[i][channel] = replace_gamma_entry(table, i, channel);
         }
       }
     }
-    limitingGamutCuspTableEX[0] = limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize - 1];
-    limitingGamutCuspTableEX[baseIndex + gamutCuspTableSize] = limitingGamutCuspTableEX[baseIndex];
+    table[0] = table[baseIndex + gamutCuspTableSize - 1];
+    table[baseIndex + gamutCuspTableSize] = table[baseIndex];
   }
 
   inline float degree_of_adaptation(float F, float _L_A)
@@ -1065,16 +1056,16 @@ local:
     init_chroma_compression(log_peak);
     init_gamut_mapper(log_peak);
 
-    float4 compressionGamutCuspTable[totalTableSize]; // { J, M, hue, reach boundary M / normM}
-    initialise_cusp_table(compressionGamutCuspTable, AP1_to_XYZ, _peakLuminance, SOURCE_CONDITIONS); // TODO: Does peakLuminance make sense?
-    initialise_reach_cusp_table(compressionGamutCuspTable, totalTableSize, _limitJmax, XYZ_to_AP1, SOURCE_CONDITIONS); // TODO: is the reach gamut supposed to be DISPLAY?
-
     initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
     extract_hue_table(limitingGamutCuspTable, hueTable);
-    setup_cusp_table(limitingGamutCuspTable, compressionGamutCuspTable, smooth_cusp_scale, _limitJmax, XYZ_to_AP1, AP1_to_XYZ, SOURCE_CONDITIONS);
-    initialise_upper_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
-    initialise_lower_hull_gamma(_midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
-    repair_broken_gamma_values();
+    smooth_cusp_table(limitingGamutCuspTable, smooth_cusp_scale);
+    initialise_upper_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+    initialise_lower_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+    repair_broken_gamma_values(limitingGamutCuspTable);
+
+    float4 compressionGamutCuspTable[totalTableSize];
+    initialise_cusp_table(compressionGamutCuspTable, AP1_to_XYZ, _peakLuminance, SOURCE_CONDITIONS);
+    precompute_reach_table(reachMTable, compressionGamutCuspTable, _limitJmax, XYZ_to_AP1, AP1_to_XYZ, SOURCE_CONDITIONS);
   }
 
   // convert radians to degrees
@@ -1289,7 +1280,7 @@ local:
   {
     float       J  = JMh.x;
     const float M  = JMh.y;
-    const float hr = radians(JMh[HUE]);
+    const float hr = radians(JMh.z);
 
     // # *Helmholtz–Kohlrausch* Effect Extension.
     //if (HK_mode[conditions])
@@ -1449,7 +1440,7 @@ local:
 
     while (low_i + 1 < high_i)
     {
-      if (wrapped_hue > compressionGamutCuspTable[i][HUE])
+      if (wrapped_hue > compressionGamutCuspTable[i].z)
       {
         low_i = i;
       }
@@ -1462,15 +1453,15 @@ local:
     lo = compressionGamutCuspTable[high_i - 1];
     hi = compressionGamutCuspTable[high_i];
 
-    float t = (wrapped_hue - lo[HUE]) / (hi[HUE] - lo[HUE]);
+    float t = (wrapped_hue - lo.z) / (hi.z - lo.z);
 
     float4 cusp  = lerp(lo, hi, t);
     return cusp;
   }
 
-  float4 limitingCuspEXFromTable(int pos, float t)
+  float2 reachMFromTable(int pos, float t)
   {
-    return lerp(limitingGamutCuspTableEX[pos - 1], limitingGamutCuspTableEX[pos], t);
+    return lerp(reachMTable[pos - 1], reachMTable[pos], t);
   }
 
   // https://www.desmos.com/calculator/oe2fscya80
@@ -1555,30 +1546,6 @@ local:
     return float2(J_boundary, M_boundary);
   }
 
-  float2 findGamutBoundaryIntersection_debug(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
-                                       float2 estimated_hull_gammas, const float slope)
-  {
-    const float  gamma_top    = estimated_hull_gammas.x;
-    const float  gamma_bottom = estimated_hull_gammas.y;
-
-    float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
-
-    const float gain = JM_cusp.y * (J_max - J_intersect_cusp);
-    const float normal = (slope * JM_cusp.y + J_max - JM_cusp.x);
-    const float value = (J_max - J_intersect_source) / (J_max - J_intersect_cusp);
-    float M_boundary_upper = gain * pow(value, gamma_top) / normal;
-
-    //return float2(slope * JM_cusp.y , J_max - JM_cusp.x);
-    return float2(J_intersect_source , J_intersect_cusp);
-    return float2(M_boundary_lower , M_boundary_upper);
-
-    float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
-
-    float J_boundary = J_intersect_source + slope * M_boundary;
-
-    return float2(J_boundary, M_boundary);
-  }
-
   inline float reinhard_compress(const float location, const float boundary_distance, const float reach_distance, bool direction)
   {
     // Assumes boundary_distance != reach_distance
@@ -1602,8 +1569,8 @@ local:
     const float threshold = max(_compressionFuncParams, gamutBoundary / reachBoundary) * gamutBoundary;
 
     // Values upto the threshold or when both boundaries are the same remain as is
-    if (location <= threshold || threshold == 1.0f)
-      return location / gamutBoundary;
+    if (location <= threshold || threshold == gamutBoundary)
+      return location / gamutBoundary; // Return normalised position
 
     // Translate to place threshold at zero
     const float location_offset = location - threshold;
@@ -1612,7 +1579,7 @@ local:
 
     const float relative_location = reinhard_compress(location_offset, boundary_offset, reach_offset, direction);
 
-    return (threshold + relative_location) / gamutBoundary; // shift back to absolute
+    return (threshold + relative_location) / gamutBoundary; // shift back to absolute and normalise
   }
 
   inline float gamut_compress_alpha(float initial, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
@@ -1676,7 +1643,13 @@ local:
     return lerp(cuspJ, _limitJmax, _focusGainBlend);
   }
 
-  float3 gamutMapper(float3 JMh, const float4 cusp, const float4 cuspEX, bool direction)
+  inline float compute_slope_gain(const float J, const float base_slope, const float limitJmax,
+                                  const float focusAdjustGain, const float analytical_threshold)
+  {
+    return  base_slope * getFocusGain(J, limitJmax, focusAdjustGain, analytical_threshold);
+  }
+
+  float3 gamutMapper(float3 JMh, const float4 cusp, const float2 reachM, bool direction)
   {
     // Limit to +ve values // TODO test this is neededS
     if (JMh.x <= 0.0f)
@@ -1698,14 +1671,14 @@ local:
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
 
     const float2 JMcusp                = float2(cusp.x, cusp.y);
-    const float  reachMaxM             = cusp[REACHM];
-    const float2 estimated_hull_gammas = float2{cuspEX[UPPER_GAMMA], cuspEX[LOWER_GAMMA]};
+    const float  reachMaxM             = reachM[REACHM];
+    const float2 estimated_hull_gammas = float2{cusp[UPPER_GAMMA], cusp[LOWER_GAMMA]};
+    const float  analytical_threshold  = compute_analytical_threshold(JMcusp.x); 
+    const float  focusJ                = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
 
-    float  Jx = JMh.x;
-    float2 JM ={JMh.x, JMh.y};
-    float  focusJ               = compute_focusJ(Jx, _midJ, _cuspMidBlend, _limitJmax);
-    float  analytical_threshold = compute_analytical_threshold(Jx); 
-    float  slope_gain           = _base_slope * getFocusGain(Jx, _limitJmax, _focusAdjustGain, analytical_threshold);
+    float  Jx         = JMh.x;
+    float2 JM         = float2{JMh.x, JMh.y};
+    float  slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax,_focusAdjustGain, analytical_threshold);
  
     if (INVERSE == direction)
     {
@@ -1715,15 +1688,13 @@ local:
       {
         Jx = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
                         clamped_smoothness, reachMaxM, _model_gamma).x;
-        focusJ               = compute_focusJ(Jx, _midJ, _cuspMidBlend, _limitJmax);
-        analytical_threshold = compute_analytical_threshold(Jx); 
-        slope_gain           = _base_slope * getFocusGain(Jx, _limitJmax, _focusAdjustGain, analytical_threshold);
+        slope_gain           = compute_slope_gain(Jx, _base_slope, _limitJmax,_focusAdjustGain, analytical_threshold);
       }
     }
     JM = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
                     clamped_smoothness, reachMaxM, _model_gamma);
 
-    return {JM.x, JM.y, JMh[HUE]};
+    return {JM.x, JM.y, JMh.z};
   }
 
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
@@ -1813,7 +1784,7 @@ local:
     const float  inputY        = _Hellwig_J_to_Y(inputJ, conditions);
     const float  luminanceTS   = aces_ts_fwd(inputY);
     const float  tonemappedJ   = _Y_to_Hellwig_J(luminanceTS, conditions);
-    const float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh[HUE]);
+    const float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
     return tonemappedJMh;
   }
 
@@ -1822,7 +1793,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     const float  luminance       = _Hellwig_J_to_Y(JMh.x, conditions);
     const float  linear          = aces_ts_rev(luminance);
     const float  untonemappedJ   = _Y_to_Hellwig_J(linear, conditions);
-    const float3 untonemappedJMh = float3(untonemappedJ, JMh.y, JMh[HUE]);
+    const float3 untonemappedJMh = float3(untonemappedJ, JMh.y, JMh.z);
     return untonemappedJMh;
   }
 
@@ -1908,9 +1879,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
     return M;
   }
 
-  float3 compressChroma(float3 JMh, const float originalJ, const float reachCuspM, const float reachMMax, const bool inverse)
+  float3 compressChroma(float3 JMh, const float originalJ, const float2 reachM, const bool inverse)
   {
-    JMh.y = chromaCompression(JMh, originalJ, reachCuspM, reachMMax, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
+    JMh.y = chromaCompression(JMh, originalJ, reachM[REACHCUSPM], reachM[REACHM], inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
     if (inverse)
       JMh.x = originalJ;
     return JMh;
@@ -1927,26 +1898,26 @@ float3 inverseTonescale(float3 JMh, int conditions)
      if (invert)
       {
         gamutMappedJMh      = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
-        const int    pos    = lookupLimitingCuspHue(JMh[HUE]);
-        const float  t      = limiting_lerp_fraction(JMh[HUE], pos);
+        const int    pos    = lookupLimitingCuspHue(JMh.z);
+        const float  t      = limiting_lerp_fraction(JMh.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float4 cuspEX = limitingCuspEXFromTable(pos, t);
-        compressedJMh       = gamutMapper(gamutMappedJMh, cusp, cuspEX, INVERSE);
+        const float2 reachM = reachMFromTable(pos, t);
+        compressedJMh       = gamutMapper(gamutMappedJMh, cusp, reachM, INVERSE);
         tonemappedJMh       = inverseTonescale(compressedJMh, SOURCE_CONDITIONS);
-        JMh                 = compressChroma(compressedJMh, tonemappedJMh.x, cusp[REACHCUSPM], cusp[REACHM], INVERSE);
+        JMh                 = compressChroma(compressedJMh, tonemappedJMh.x, reachM, INVERSE);
         output              = JMh_to_XYZ(JMh, SOURCE_CONDITIONS);
       }
       else
       {
         float3 clamped      = clamp_to_AP1(src);
         JMh                 = XYZ_to_JMh(clamped, SOURCE_CONDITIONS);
-        const int    pos    = lookupLimitingCuspHue(JMh[HUE]);
-        const float  t      = limiting_lerp_fraction(JMh[HUE], pos);
+        const int    pos    = lookupLimitingCuspHue(JMh.z);
+        const float  t      = limiting_lerp_fraction(JMh.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float4 cuspEX = limitingCuspEXFromTable(pos, t);
+        const float2 reachM = reachMFromTable(pos, t);
         tonemappedJMh       = forwardTonescale(JMh, SOURCE_CONDITIONS);
-        compressedJMh       = compressChroma(tonemappedJMh, JMh.x, cusp[REACHCUSPM], cusp[REACHM], FORWARDS);
-        gamutMappedJMh      = gamutMapper(compressedJMh, cusp, cuspEX, FORWARDS);
+        compressedJMh       = compressChroma(tonemappedJMh, JMh.x, reachM, FORWARDS);
+        gamutMappedJMh      = gamutMapper(compressedJMh, cusp, reachM, FORWARDS);
         output              = JMh_to_XYZ(gamutMappedJMh, DISPLAY_CONDITIONS);
       }
     return output;
@@ -1977,19 +1948,19 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (FORWARDS_compressChroma == diagnosticMode)
     {
-        const int    pos  = lookupLimitingCuspHue(src[HUE]);
-        const float  t    = limiting_lerp_fraction(src[HUE], pos);
-        const float4 cusp = limitingCuspFromTable(pos, t);
-        float3 JMh        = inverseTonescale(src, SOURCE_CONDITIONS);
-        output            = compressChroma(src, JMh.x, cusp[REACHCUSPM], cusp[REACHM], FORWARDS);
+        const int    pos    = lookupLimitingCuspHue(src.z);
+        const float  t      = limiting_lerp_fraction(src.z, pos);
+        const float2 reachM = reachMFromTable(pos, t);
+        float3 JMh          = inverseTonescale(src, SOURCE_CONDITIONS);
+        output              = compressChroma(src, JMh.x, reachM, FORWARDS);
     }
     else if (FORWARDS_gamutMapper == diagnosticMode)
     {
-        const int    pos = lookupLimitingCuspHue(src[HUE]);
-        const float  t   = limiting_lerp_fraction(src[HUE], pos);
+        const int    pos    = lookupLimitingCuspHue(src.z);
+        const float  t      = limiting_lerp_fraction(src.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float4 cuspEX = limitingCuspEXFromTable(pos, t);
-        output = gamutMapper(src, cusp, cuspEX, FORWARDS);
+        const float2 reachM = reachMFromTable(pos, t);
+        output = gamutMapper(src, cusp, reachM, FORWARDS);
     }
     else if (FORWARDS_JMh_to_XYZ == diagnosticMode)
     {
@@ -2001,11 +1972,11 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (INVERSE_gamutMapper == diagnosticMode)
     {
-        const int    pos = lookupLimitingCuspHue(src[HUE]);
-        const float  t   = limiting_lerp_fraction(src[HUE], pos);
+        const int    pos    = lookupLimitingCuspHue(src.z);
+        const float  t      = limiting_lerp_fraction(src.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float4 cuspEX = limitingCuspEXFromTable(pos, t);
-        output = gamutMapper(src, cusp, cuspEX, INVERSE);
+        const float2 reachM = reachMFromTable(pos, t);
+        output = gamutMapper(src, cusp, reachM, INVERSE);
     }
     else if (INVERSE_inverseTonescale == diagnosticMode)
     {
@@ -2013,11 +1984,11 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (INVERSE_compressChroma == diagnosticMode)
     {
-        const int    pos  = lookupLimitingCuspHue(src[HUE]);
-        const float  t    = limiting_lerp_fraction(src[HUE], pos);
-        const float4 cusp = limitingCuspFromTable(pos, t);
+        const int    pos  = lookupLimitingCuspHue(src.z);
+        const float  t    = limiting_lerp_fraction(src.z, pos);
+        const float2 reachM = reachMFromTable(pos, t);
         float3 JMh        = inverseTonescale(src, SOURCE_CONDITIONS);
-        output            = compressChroma(src, JMh.x, cusp[REACHCUSPM], cusp[REACHM], INVERSE);
+        output            = compressChroma(src, JMh.x, reachM, INVERSE);
     }
     else if (INVERSE_JMh_to_XYZ == diagnosticMode)
     {
@@ -2036,16 +2007,16 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
-        const float4 cuspEX      = limitingCuspEXFromTable(pos, t);
-        output = float3(cuspEX[UPPER_GAMMA], cuspEX[LOWER_GAMMA], t);
+        const float4 cusp        = limitingCuspFromTable(pos, t);
+        output = float3(cusp[UPPER_GAMMA], cusp[LOWER_GAMMA], t);
     }
     else if (DEBUG_reachGamutCuspTable == diagnosticMode)
     {
         const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
-        const float4 cusp        = limitingCuspFromTable(pos, t);
-        output = float3(cusp[REACHCUSPM], cusp[REACHM], wrapped_hue);
+        const float2 reachM      = reachMFromTable(pos, t);
+        output = float3(reachM[REACHCUSPM], reachM[REACHM], wrapped_hue);
     }
     else if (DEBUG_limitingGamutCuspTableRaw == diagnosticMode)
     {
@@ -2055,22 +2026,17 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_limitingGamutCuspTableRaw2 == diagnosticMode)
     {
-         int index = clamp(int(src.z), 0, totalTableSize);
+        int index = clamp(int(src.z), 0, totalTableSize);
         float4 cusp = limitingGamutCuspTable[index];
-        output = float3(cusp.x, cusp.y, cusp[REACHM]);
+        output = float3(cusp.x, cusp.y, cusp.w);
     }
-     else if (DEBUG_limitingGamutCuspTableEXRaw == diagnosticMode)
+    else if (DEBUG_reachMTableRaw == diagnosticMode)
     {
         int index = clamp(int(src.z), 0, totalTableSize);
-        float4 cusp = limitingGamutCuspTableEX[index];
-        output = float3(cusp.x, cusp.y, cusp.z);
+        float2 reachM = reachMTable[index];
+        output = float3(reachM.x, reachM.y, index);
     }
-    else if (DEBUG_limitingGamutCuspTableEXRaw2 == diagnosticMode)
-    {
-         int index = clamp(int(src.z), 0, totalTableSize);
-        float4 cusp = limitingGamutCuspTableEX[index];
-        output = float3(cusp.x, cusp.y, cusp[REACHM]);
-    }
+    
     else if (DEBUG_Jconstants == diagnosticMode)
     {
         output = float3(_midJ, _limitJmax, _focusDist);
