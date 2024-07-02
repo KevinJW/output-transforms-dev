@@ -192,7 +192,7 @@ local:
 #else
 #define hue_limit (2 * PI)
 #endif
-#define gamutCuspTableSize 720 // Nominal count of hues sampled in the half open range [0.0, hue_limit) needs to be a multiple of 6 to sample hull corners
+#define gamutCuspTableSize 360 // Nominal count of hues sampled in the half open range [0.0, hue_limit) needs to be a multiple of 6 to sample hull corners
 #define additonal_entries 2    // Adds extra entries to wrap the hues without special cases
 #define totalTableSize gamutCuspTableSize + additonal_entries
 #define baseIndex 1            // array index for smallest hue, not necessarily actually a 0.0 hue angle
@@ -629,7 +629,7 @@ local:
     }
   }
 
-  void extract_hue_table(float4 * table, float * hueTable)
+  void extract_hue_table(const float4 * table, float * hueTable)
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
@@ -637,7 +637,7 @@ local:
     }
   }
 
-  void smooth_cusp_table(float4 * table, float2 scale)
+  void smooth_cusp_table(float4 * table, const float2 scale)
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
@@ -1159,34 +1159,34 @@ local:
     return RGB_p;
   }
 
-  // Return compression gamut cusp M scaled with an eccentricity factor
-  inline float eccentricity_factor(float hr, bool apply_eccentricity)
-  {
-    if (!apply_eccentricity)
-    {
-        return 1.0f;
-    }
-
-    // Hellwig2022/Helles2023
-    // CAM16 vs Hellwig2022: https://onlinelibrary.wiley.com/cms/asset/60788dfc-6bae-4949-bf8d-bd8c3467aef8/col22792-fig-0005-m.jpg
-    const float _1_hr = 1 * hr; // TODO: investigate spline implementation from Luke's PhD (A.15)
-    const float _2_hr = 2 * hr;
-    const float _3_hr = 3 * hr;
-    const float _4_hr = 4 * hr;
-    // clang-format off
-    return (
-        - 0.0582f * cos(_1_hr)
-        - 0.0258f * cos(_2_hr)
-        - 0.1347f * cos(_3_hr)
-        + 0.0289f * cos(_4_hr)
-        - 0.1475f * sin(_1_hr)
-        - 0.0308f * sin(_2_hr)
-        + 0.0385f * sin(_3_hr)
-        + 0.0096f * sin(_4_hr)
-        + 1.0f
-      );
-    // clang-format on
-  }
+//  // Return compression gamut cusp M scaled with an eccentricity factor
+//  inline float eccentricity_factor(float hr, bool apply_eccentricity)
+//  {
+//    if (!apply_eccentricity)
+//    {
+//        return 1.0f;
+//    }
+//
+//    // Hellwig2022/Helles2023
+//    // CAM16 vs Hellwig2022: https://onlinelibrary.wiley.com/cms/asset/60788dfc-6bae-4949-bf8d-bd8c3467aef8/col22792-fig-0005-m.jpg
+//    const float _1_hr = 1 * hr; // TODO: investigate spline implementation from Luke's PhD (A.15)
+//    const float _2_hr = 2 * hr;
+//    const float _3_hr = 3 * hr;
+//    const float _4_hr = 4 * hr;
+//    // clang-format off
+//    return (
+//        - 0.0582f * cos(_1_hr)
+//        - 0.0258f * cos(_2_hr)
+//        - 0.1347f * cos(_3_hr)
+//        + 0.0289f * cos(_4_hr)
+//        - 0.1475f * sin(_1_hr)
+//        - 0.0308f * sin(_2_hr)
+//        + 0.0385f * sin(_3_hr)
+//        + 0.0096f * sin(_4_hr)
+//        + 1.0f
+//      );
+//    // clang-format on
+//  }
 
   // XYZ to Hellwig2020 JMh
   //
@@ -1233,7 +1233,9 @@ local:
     return sign(J) * _Achromatic_from_J(fabs(J), conditions);
   }
 
-  float3 XYZ_to_Hellwig2022_JMh(float3 XYZ, int conditions)
+  // convert XYZ tristimulus values to the CAM J (lightness), M (colorfulness) and h (hue) correlates
+  // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
+  float3 XYZ_to_JMh(float3 XYZ, int conditions)
   {
     float3 RGB_c;
     RGB_c.x = dot(DL_weights[conditions], XYZ);
@@ -1276,7 +1278,9 @@ local:
     return {J, M, h};
   }
 
-  float3 Hellwig2022_JMh_to_XYZ(float3 JMh, int conditions)
+  // convert the CAM J (lightness), M (colorfulness) and h (hue) correlates to XYZ tristimulus values
+  // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
+  float3 JMh_to_XYZ(float3 JMh, int conditions)
   {
     float       J  = JMh.x;
     const float M  = JMh.y;
@@ -1322,20 +1326,6 @@ local:
     XYZ.z = dot(DS_weights_inv[conditions], RGB_c);
 
     return XYZ;
-  }
-
-  // convert XYZ tristimulus values to the CAM J (lightness), M (colorfulness) and h (hue) correlates
-  // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 XYZ_to_JMh(float3 XYZ, int conditions)
-  {
-    return XYZ_to_Hellwig2022_JMh(XYZ, conditions);
-  }
-
-  // convert the CAM J (lightness), M (colorfulness) and h (hue) correlates to XYZ tristimulus values
-  // needs XYZ tristimulus values for the reference white and the viewing conditions as parameters
-  inline float3 JMh_to_XYZ(float3 JMh, int conditions)
-  {
-    return Hellwig2022_JMh_to_XYZ(JMh, conditions);
   }
 
   inline int hue_position_in_uniform_table(float wrapped_hue, int table_size)
@@ -1418,14 +1408,9 @@ local:
           / (hueTable[pos] - hueTable[pos - 1]);
   }
 
-  float4 limitingCuspFromTable(int pos, float t)
+  inline float4 limitingCuspFromTable(int pos, float t)
   {
-    const float4 lo  = limitingGamutCuspTable[pos - 1];
-    const float4 hi  = limitingGamutCuspTable[pos];
-
-    const float4 cusp = lerp(lo, hi, t);
-
-    return cusp;
+    return lerp(limitingGamutCuspTable[pos - 1], limitingGamutCuspTable[pos], t);
   }
 
   float4 compressionCuspFromTable(float wrapped_hue, float4 * compressionGamutCuspTable)
@@ -1455,11 +1440,10 @@ local:
 
     float t = (wrapped_hue - lo.z) / (hi.z - lo.z);
 
-    float4 cusp  = lerp(lo, hi, t);
-    return cusp;
+    return lerp(lo, hi, t);
   }
 
-  float2 reachMFromTable(int pos, float t)
+  inline float2 reachMFromTable(int pos, float t)
   {
     return lerp(reachMTable[pos - 1], reachMTable[pos], t);
   }
@@ -1475,7 +1459,13 @@ local:
     // Approximate inverse required above threshold TODO: explain why
     float gain = (limitJmax - analytical_threshold) / max(0.0001f, (limitJmax - min(limitJmax, J)));
     return pow(log10(gain), 1.0f / focusAdjustGain) + 1.0f;
-   }
+  }
+
+  inline float compute_slope_gain(const float J, const float base_slope, const float limitJmax,
+                                  const float focusAdjustGain, const float analytical_threshold)
+  {
+    return base_slope * getFocusGain(J, limitJmax, focusAdjustGain, analytical_threshold);
+  }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
   float solve_J_intersect(float2 JM, float focusJ, float maxJ, float slope_gain)
@@ -1519,29 +1509,50 @@ local:
        direction_scaler = (limitJmax - intersectJ);
     }
 
-    return  direction_scaler * (intersectJ - focusJ) / (focusJ * slope_gain);
+    return direction_scaler * (intersectJ - focusJ) / (focusJ * slope_gain);
   }
 
-  inline float getReachBoundaryM(float reachMaxM, float limitJmax, float gamma, float intersectJ, const float slope)
+  inline float estimate_line_and_boundary_intersection_M(const float J_axis_intersect, const float slope,
+                                                         const float inv_gamma, const float J_max, const float M_max,
+                                                         const float J_intersection_reference)
   {
-    return limitJmax * pow(intersectJ / limitJmax, gamma) * reachMaxM / (limitJmax - slope * reachMaxM);
+    // Line defined by     J = slope * x + J_axis_intersect
+    // Boundary defined by J = J_max * (x / M_max) ^ (1/inv_gamma)
+    // Approximate as we do not want to iteratively solve intersection of a straight line and an exponential
+    
+    // We calculate a shifted intersection from the original intersection using the inverse of the exponential
+    // and the provided reference
+    const float normalised_J        = J_axis_intersect / J_intersection_reference;
+    const float shifted_intersecion = J_intersection_reference * pow(normalised_J, inv_gamma);
+
+    // Now we find the M intersection of two lines
+    // line from origin to J,M Max       l1(x) = J/M * x
+    // line from J Intersect' with slope l2(x) = slope * x + Intersect'
+
+    //return shifted_intersecion / ((J_max / M_max) - slope);
+    return shifted_intersecion * M_max / (J_max - slope * M_max);
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
   float2 findGamutBoundaryIntersection(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
                                        float2 estimated_hull_gammas, const float slope)
   {
-    const float  gamma_top    = estimated_hull_gammas.x;
-    const float  gamma_bottom = estimated_hull_gammas.y;
+    const float gamma_top    = estimated_hull_gammas.x;
+    const float gamma_bottom = estimated_hull_gammas.y;
 
-    float M_boundary_lower = J_intersect_cusp * pow(J_intersect_source / J_intersect_cusp, gamma_bottom) / (JM_cusp.x / JM_cusp.y - slope);
+    const float M_boundary_lower = estimate_line_and_boundary_intersection_M(J_intersect_source, slope, gamma_bottom, JM_cusp.x, JM_cusp.y, J_intersect_cusp);
 
-    float M_boundary_upper = JM_cusp.y * (J_max - J_intersect_cusp) * pow((J_max - J_intersect_source) / (J_max - J_intersect_cusp), gamma_top)
-      / (slope * JM_cusp.y + J_max - JM_cusp.x);
+    // The upper hull is flipped and thus 'zerod' at J_max
+    // Also note we negate the slope
+    const float f_J_intersect_cusp = J_max - J_intersect_cusp;
+    const float f_J_intersect_source = J_max - J_intersect_source;
+    const float f_JM_cusp_J = J_max - JM_cusp.x;
+    const float M_boundary_upper = estimate_line_and_boundary_intersection_M(f_J_intersect_source, -slope, gamma_top, f_JM_cusp_J, JM_cusp.y, f_J_intersect_cusp);
 
-    float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
+    // Smooth minimum between the two calculated values for the M component
+    const float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
 
-    float J_boundary = J_intersect_source + slope * M_boundary;
+    const float J_boundary = slope * M_boundary + J_intersect_source;
 
     return float2(J_boundary, M_boundary);
   }
@@ -1609,7 +1620,7 @@ local:
     return t;
   }
 
-  float2 gamutMapJM(float2 JM, bool direction, float Jx, float limitJmax, float slope_gain,
+  float2 gamutMapJM(float2 JM, bool direction, float limitJmax, float slope_gain,
                     float2 JMcusp, float focusJ, float2 estimated_hull_gammas, float smoothness,
                     float reachMaxM, float model_gamma)
   {
@@ -1621,12 +1632,11 @@ local:
 
     if (ganutBoundary.y <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
     {
-      return float2(Jx, 0.0f);
+      return float2(JM.x, 0.0f);
     }
 
-    const float  reachMax         = getReachBoundaryM(reachMaxM, limitJmax, model_gamma, intersectJ, slope);
-
     // Compress the out of gamut color along the projection line
+    const float  reachMax     = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
     const float  t            = gamut_compress_alpha(JM.y, ganutBoundary.y, reachMax, direction);
     const float2 project_to   = float2(intersectJ, 0.0f);
     const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
@@ -1641,12 +1651,6 @@ local:
   inline float compute_analytical_threshold(float cuspJ)
   {
     return lerp(cuspJ, _limitJmax, _focusGainBlend);
-  }
-
-  inline float compute_slope_gain(const float J, const float base_slope, const float limitJmax,
-                                  const float focusAdjustGain, const float analytical_threshold)
-  {
-    return  base_slope * getFocusGain(J, limitJmax, focusAdjustGain, analytical_threshold);
   }
 
   float3 gamutMapper(float3 JMh, const float4 cusp, const float2 reachM, bool direction)
@@ -1686,12 +1690,12 @@ local:
       // Analytic inverse below threshold extra pass approximation above
       if (Jx > analytical_threshold)
       {
-        Jx = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
+        Jx = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
                         clamped_smoothness, reachMaxM, _model_gamma).x;
-        slope_gain           = compute_slope_gain(Jx, _base_slope, _limitJmax,_focusAdjustGain, analytical_threshold);
+        slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax,_focusAdjustGain, analytical_threshold);
       }
     }
-    JM = gamutMapJM(JM, direction, Jx, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
+    JM = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas,
                     clamped_smoothness, reachMaxM, _model_gamma);
 
     return {JM.x, JM.y, JMh.z};
@@ -1784,8 +1788,7 @@ local:
     const float  inputY        = _Hellwig_J_to_Y(inputJ, conditions);
     const float  luminanceTS   = aces_ts_fwd(inputY);
     const float  tonemappedJ   = _Y_to_Hellwig_J(luminanceTS, conditions);
-    const float3 tonemappedJMh = float3(tonemappedJ, inputJMh.y, inputJMh.z);
-    return tonemappedJMh;
+    return float3(tonemappedJ, inputJMh.y, inputJMh.z);
   }
 
 float3 inverseTonescale(float3 JMh, int conditions)
@@ -1793,8 +1796,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     const float  luminance       = _Hellwig_J_to_Y(JMh.x, conditions);
     const float  linear          = aces_ts_rev(luminance);
     const float  untonemappedJ   = _Y_to_Hellwig_J(linear, conditions);
-    const float3 untonemappedJMh = float3(untonemappedJ, JMh.y, JMh.z);
-    return untonemappedJMh;
+    return float3(untonemappedJ, JMh.y, JMh.z);
   }
 
   // A "toe" function that remaps the given value x between 0 and limit.
