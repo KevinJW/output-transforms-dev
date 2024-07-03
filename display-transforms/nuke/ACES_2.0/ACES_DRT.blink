@@ -711,9 +711,11 @@ local:
     const float intersectJ       = solve_J_intersect(float2(testJmh.x, testJmh.y), focusJ, limitJmax, slope_gain);
     const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
-    const float2 approxLimit =
-        findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
-    const float3 approximate_JMh = float3(approxLimit.x, approxLimit.y, testJmh.z);
+    const float approxLimit =
+        findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
+    const float J_boundary       = slope * approxLimit + intersectJ;
+
+    const float3 approximate_JMh = float3(J_boundary, approxLimit, testJmh.z);
     const float3 newLimitRGB     = JMh_to_linear_RGB(approximate_JMh, XYZ_to_RGB_limit, conditions);
     return newLimitRGB;
   }
@@ -1534,8 +1536,8 @@ local:
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
-  float2 findGamutBoundaryIntersection(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
-                                       float2 estimated_hull_gammas, const float slope)
+  float findGamutBoundaryMIntersection(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
+                                      float2 estimated_hull_gammas, const float slope)
   {
     const float gamma_top    = estimated_hull_gammas.x;
     const float gamma_bottom = estimated_hull_gammas.y;
@@ -1551,19 +1553,11 @@ local:
 
     // Smooth minimum between the two calculated values for the M component
     const float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
-
-    const float J_boundary = slope * M_boundary + J_intersect_source;
-
-    return float2(J_boundary, M_boundary);
+    return M_boundary;
   }
 
-  inline float reinhard_compress(const float location, const float boundary_distance, const float reach_distance, bool direction)
+  inline float reinhard_compress(const float scale, const float factor, bool direction)
   {
-    // Assumes boundary_distance != reach_distance
-    // Generaly speaking boundary should be < reach
-    const float scale  = (reach_distance) / (((reach_distance) / (boundary_distance)) - 1.0f);
-    const float factor = location / scale;
-
     if (INVERSE == direction)
     {
       if (factor >= 1.0f)
@@ -1581,66 +1575,44 @@ local:
 
     // Values upto the threshold or when both boundaries are the same remain as is
     if (location <= threshold || threshold == gamutBoundary)
-      return location / gamutBoundary; // Return normalised position
+      return location;
 
     // Translate to place threshold at zero
     const float location_offset = location - threshold;
     const float boundary_offset = gamutBoundary - threshold;
     const float reach_offset    = reachBoundary - threshold;
 
-    const float relative_location = reinhard_compress(location_offset, boundary_offset, reach_offset, direction);
+    // Assumes boundary != reach
+    // Generaly speaking boundary should be < reach
+    const float scale  = (reach_offset) / (((reach_offset) / (boundary_offset)) - 1.0f);
+    const float factor = location_offset / scale;
 
-    return (threshold + relative_location) / gamutBoundary; // shift back to absolute and normalise
-  }
+    const float relative_location = reinhard_compress(scale, factor, direction);
 
-  inline float gamut_compress_alpha(float initial, const float gamutBoundary, const float locusMaximum, bool direction) // TODO better name
-  {
-    float t               = initial / gamutBoundary;
-    const float locus     = max(1.0001f, locusMaximum / gamutBoundary); // TODO: magic threshold? also in compressPowerP function needed here?
-    const float threshold = max(_compressionFuncParams, 1.0f / locus);
-
-    if (t < threshold)
-      return t;
-    
-    const float scale  = (locus - threshold) / (((locus - threshold) / (1.0f - threshold)) - 1.0f);
-    const float factor = (t - threshold) / scale;
-
-    if (direction && factor > 1.0f)
-      return t + scale;
-
-    if (direction)
-    {
-      t = threshold + scale * (-(factor / (factor - 1.0f)));
-    }
-    else
-    {
-      t = threshold + scale * (factor) / (1.0f + factor);
-    }
-
-    return t;
+    return (threshold + relative_location); // shift back to absolute
   }
 
   float2 gamutMapJM(float2 JM, bool direction, float limitJmax, float slope_gain,
                     float2 JMcusp, float focusJ, float2 estimated_hull_gammas, float smoothness,
                     float reachMaxM, float model_gamma)
   {
-    const float  intersectJ       = solve_J_intersect(JM, focusJ, limitJmax, slope_gain);
-    const float  slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
-    const float  J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
-    const float2 ganutBoundary    = findGamutBoundaryIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ,
+    const float intersectJ       = solve_J_intersect(JM, focusJ, limitJmax, slope_gain);
+    const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
+    const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
+    const float ganutBoundaryM   = findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ,
                                                                   smoothness, estimated_hull_gammas, slope);
 
-    if (ganutBoundary.y <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
-    {
-      return float2(JM.x, 0.0f);
-    }
+    //if (ganutBoundaryM <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
+    //{
+    //  return float2(JM.x, 0.0f);
+    //}
 
     // Compress the out of gamut color along the projection line
-    const float  reachMax     = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
-    const float  t            = gamut_compress_alpha(JM.y, ganutBoundary.y, reachMax, direction);
-    const float2 project_to   = float2(intersectJ, 0.0f);
-    const float2 JMcompressed = lerp(project_to, ganutBoundary, t);
-    return JMcompressed;
+    const float reachMax = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
+    const float mappedM  = gamut_mapped_location(JM.y, ganutBoundaryM, reachMax, direction);
+    const float mappedJ  = slope * mappedM + intersectJ;
+
+    return float2{mappedJ, mappedM};
   }
 
   inline float compute_focusJ(float J, float midJ, float cuspMidBlend, float limitJmax)
@@ -1738,21 +1710,20 @@ local:
   }
 
   // ACES Tonescale function, proposed by Daniele Siragusano
-  inline float aces_ts_fwd(float Y)
+  inline float aces_ts_fwd(const float Y)
   {
     // Assumes Y is >= +0.0
-    float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
-    float h = max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
+    const float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
+    const float h = max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
     return h * aces_ts_n;
   }
 
-  inline float aces_ts_rev(float Y)
+  inline float aces_ts_rev(const float Y)
   {
     //Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
-    float h = Y / aces_ts_n;
-    float f = (h + sqrt(h * (4.0f * aces_ts_t_1 + h))) / 2.0f;
-    f       = aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
-    return f;
+    const float h = Y / aces_ts_n;
+    const float f = (h + sqrt(h * (4.0f * aces_ts_t_1 + h))) / 2.0f;
+    return  aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
   }
 
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
@@ -1900,8 +1871,8 @@ float3 inverseTonescale(float3 JMh, int conditions)
      if (invert)
       {
         gamutMappedJMh      = XYZ_to_JMh(src, DISPLAY_CONDITIONS);
-        const int    pos    = lookupLimitingCuspHue(JMh.z);
-        const float  t      = limiting_lerp_fraction(JMh.z, pos);
+        const int    pos    = lookupLimitingCuspHue(gamutMappedJMh.z);
+        const float  t      = limiting_lerp_fraction(gamutMappedJMh.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
         const float2 reachM = reachMFromTable(pos, t);
         compressedJMh       = gamutMapper(gamutMappedJMh, cusp, reachM, INVERSE);
@@ -2054,6 +2025,16 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
 
         output = float3(sM, dM, wrapped_hue); 
+    }
+    else if (DEBUG_gamutCompressAlphaFORWARDS == diagnosticMode)
+    {
+        const float gml = gamut_mapped_location(src.x, src.y, src.z, FORWARDS);
+        output = float3(gml, src.y, src.z); 
+    }
+    else if (DEBUG_gamutCompressAlphaINVERSE == diagnosticMode)
+    {
+        const float gml = gamut_mapped_location(src.x, src.y, src.z, INVERSE);
+        output = float3(gml, src.y, src.z); 
     }
     else
     {
