@@ -202,6 +202,7 @@ local:
 #define gammaMaximum 2.0f
 #define gammaSearchStep 0.2f
 #define badGammaTollerance 1e-2f
+#define hueFindingTollerance 1e-7f
 
   // Non-uniform in h
   float  hueTable[totalTableSize];
@@ -215,8 +216,11 @@ local:
 #define REACHCUSPM 0
 #define REACHM 1
 
-  float3 AP1_cusp_corners[8];
-  float3 AP1_JMh_corners[8];
+  float3 reach_cusp_corners[8];
+  float3 reach_JMh_corners[8];
+
+  float3 display_cusp_corners[8];
+  float3 display_JMh_corners[8];
 
   float3 inputWhite;
   float3 limitWhite;
@@ -599,40 +603,6 @@ local:
     return delta.x / delta.y;
   }
 
-  float2 find_cusp_for_hue(float hue, const float3x3& xyz_matrix, const float limitJmax, const int conditions, const float peak)
-  {
-    float2 test(0.0f, 0.0f);
-    float2 best = test;
-    float2 previous = test;
-    float lower_limit = 0.0f;
-    float upper_limit = limitJmax;
-    float step_size = limitJmax / 16.0f;
-
-    while (step_size > 1e-5)
-    {
-      for (test.x = lower_limit; test.x <= upper_limit; test.x += step_size)
-      {
-        test.y = find_reach_boundaryM(hue, test.x, xyz_matrix, 1e-4, conditions, peak);
-        if (test.y >= best.y)
-        {
-          if (previous.y < best.y)
-            previous = best;
-          best = test;
-        }
-        else
-        {
-          // value between test and the previous best as we may have stepped over it
-          lower_limit = previous.x;
-          upper_limit = test.x;
-          step_size = step_size / 4.0f;
-          break;
-        }
-      }
-    }
-    
-    return best;
-  }
-
   void build_cusp_corners_tables(float3 RGB_corners[8], float3 JMh_corners[8], const int rgb_conditions, const float3x3& rgb_matrix, const float peak)
   {
     // Calculate hues for corners
@@ -661,12 +631,12 @@ local:
     JMh_corners[cuspCornerCount+1].z = JMh_corners[cuspCornerCount+1].z + hue_limit;
   }
 
-  float2 find_cusp_for_hue2(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float limitJmax, const float peak)
+  float2 find_reach_cusp_for_hue(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float peak, const float tollerance)
   {
     int upper_corner = 1;
     for (int i = 1; i != 8; ++i) // TODO: binary search?
     {
-       if (AP1_JMh_corners[i].z > hue)
+       if (reach_JMh_corners[i].z > hue)
        {
         upper_corner = i;
         break;
@@ -675,26 +645,27 @@ local:
     const int lower_corner = upper_corner - 1;
 
     // search by lerping between corners for the hue
-    const float3 cusp_lower = AP1_cusp_corners[lower_corner];
-    const float3 cusp_upper = AP1_cusp_corners[upper_corner];
+    const float3 cusp_lower = reach_cusp_corners[lower_corner];
+    const float3 cusp_upper = reach_cusp_corners[upper_corner];
 
     float lower_t = 0.0f;
     float upper_t = 1.0f;
 
     float3 JMh;
-    if (AP1_JMh_corners[lower_corner].z == hue)
+    if (reach_JMh_corners[lower_corner].z == hue)
     {
-      return float2(AP1_JMh_corners[lower_corner].x, AP1_JMh_corners[lower_corner].y);
+      return float2(reach_JMh_corners[lower_corner].x, reach_JMh_corners[lower_corner].y);
     }
     float3 sample;
+    float sample_t;
     if (upper_corner > 6)
     {
-      while((upper_t - lower_t) > 1e-5)
+      while((upper_t - lower_t) > tollerance)
       {
-        const float sample_t = midpoint(lower_t, upper_t);
+        sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
         JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
-        if ((JMh.z < AP1_JMh_corners[lower_corner].z) || (JMh.z > hue))
+        if ((JMh.z < reach_JMh_corners[lower_corner].z) || (JMh.z > hue))
         {
           upper_t = sample_t;
         }
@@ -706,12 +677,12 @@ local:
     }
     else
     {
-      while((upper_t - lower_t) > 1e-5)
+      while((upper_t - lower_t) > tollerance)
       {
-        const float sample_t = midpoint(lower_t, upper_t);
+        sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
         JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
-        if ((JMh.z > AP1_JMh_corners[upper_corner].z) || (JMh.z <= hue))
+        if ((JMh.z > reach_JMh_corners[upper_corner].z) || (JMh.z <= hue))
         {
           lower_t = sample_t;
         }
@@ -721,7 +692,10 @@ local:
         }
       }
     }
-   
+    sample_t = midpoint(lower_t, upper_t);
+    sample = lerp(cusp_lower, cusp_upper, sample_t);
+    JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+
     return float2(JMh.x, JMh.y);
   }
 
@@ -789,13 +763,13 @@ local:
     for (int i = 0; i < totalTableSize; ++i)
     {
       const float hue = hueTable[i];
-
+      //float2 JM = find_reach_cusp_for_hue(hue, rgb_matrix, conditions, peak, hueFindingTollerance);
       reachMTable[i][REACHCUSPM] = compressionCuspFromTable(hue, reach_table).y; // Resample compression cusp for Disply hues save on extra binary search 
-      reachMTable[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions, peak);
+      reachMTable[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
     }
   }
 
-  float find_reach_boundaryM(const float hue, const float givenJ, const float3x3& matrix, const float threshold, const int conditions, const float peak)
+  float find_reach_boundaryM(const float hue, const float givenJ, const float3x3& matrix, const float threshold, const int conditions)
   {
     const float search_range = 100.0;
     float low     = 0.0;
@@ -804,7 +778,7 @@ local:
 
     while (!outside && high < 1400.0)
     {
-      outside = outside_hull(JMh_to_linear_RGB(float3(givenJ, high, hue), matrix, conditions), peak);
+      outside = any_below_zero(JMh_to_linear_RGB(float3(givenJ, high, hue), matrix, conditions));
       if (!outside)
       {
         low  = high;
@@ -815,7 +789,7 @@ local:
     while ((high - low) > threshold)
     {
       const float sampleM = midpoint(low, high);
-      outside             = outside_hull(JMh_to_linear_RGB(float3(givenJ, sampleM, hue), matrix, conditions), peak);
+      outside             = any_below_zero(JMh_to_linear_RGB(float3(givenJ, sampleM, hue), matrix, conditions));
       if (outside)
       {
         high = sampleM;
@@ -1195,7 +1169,8 @@ local:
     init_chroma_compression(log_peak);
     init_gamut_mapper(log_peak);
 
-    build_cusp_corners_tables(AP1_cusp_corners, AP1_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _peakLuminance);
+    build_cusp_corners_tables(reach_cusp_corners, reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _peakLuminance);
+    build_cusp_corners_tables(display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, RGB_to_XYZ_limit, _peakLuminance);
 
     initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
     extract_hue_table(limitingGamutCuspTable, hueTable);
@@ -2171,8 +2146,8 @@ float3 inverseTonescale(float3 JMh, int conditions)
     else if (DEBUG_reachMConditions == diagnosticMode)
     {
         const float wrapped_hue = wrap_hue(src.z);
-        const float sM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS, src.x);
-        const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS, src.x);
+        const float sM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS);
+        const float dM = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
 
         output = float3(sM, dM, wrapped_hue); 
     }
@@ -2192,25 +2167,20 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float sms = smin_s(src.x, src.y, clamped_smoothness, src.z);
         output = float3(sm, sms, src.z); 
     }
-    else if (101 == diagnosticMode)
-    {
-        float2 found = find_cusp_for_hue(src.z, XYZ_to_AP1, _limitJmax, SOURCE_CONDITIONS, src.x);
-        output = float3(found.x, found.y, src.z);
-    }
     else if (102 == diagnosticMode)
     {
-        float2 found = find_cusp_for_hue2(src.z, AP1_to_XYZ, SOURCE_CONDITIONS, _limitJmax, src.x);
+        float2 found = find_reach_cusp_for_hue(src.z, AP1_to_XYZ, SOURCE_CONDITIONS, src.x, hueFindingTollerance);
         output = float3(found.x, found.y, src.z);
     }
     else if (103 == diagnosticMode)
     {
         const int index = int(src.z) % 8;
-        output = AP1_JMh_corners[index];
+        output = reach_JMh_corners[index];
     }
     else if (104 == diagnosticMode)
     {
         const int index = int(src.z) % 8;
-        output = AP1_cusp_corners[index];
+        output = reach_cusp_corners[index];
     }
 
     else
