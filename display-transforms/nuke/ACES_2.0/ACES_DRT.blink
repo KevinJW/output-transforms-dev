@@ -554,7 +554,7 @@ local:
     smooth_cusp_scale = 1.0f + _smoothOffset * clamped_smoothness;
 
     _focusDist = _focusDistance + _focusDistance * _focusDistanceScaling * log_peak;;    
-    _midJ = XYZ_to_JMh(limitWhite * aces_ts_c_t * aces_ts_n, DISPLAY_CONDITIONS).x;
+    _midJ = XYZ_to_JMh(limitWhite * aces_ts_c_t * _XYZ_w_scaler, DISPLAY_CONDITIONS).x; // TODO: scale white scaler ?
 
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
@@ -595,12 +595,6 @@ local:
                                      : X)
       + m;
     return RGB;
-  }
-
-  float slope_between(float2 lower, float2 upper)
-  {
-    const float2 delta = upper - lower;
-    return delta.x / delta.y;
   }
 
   void build_cusp_corners_tables(float3 RGB_corners[8], float3 JMh_corners[8], const int rgb_conditions, const float3x3& rgb_matrix, const float peak)
@@ -1111,7 +1105,7 @@ local:
     const float k    = 1.0f / (5.0f * _L_A + 1.0f);
     const float k4   = k * k * k * k;
     const float _F_L = 0.2f * k4 * (5.0f * _L_A) + 0.1f * pow((1.0f - k4), 2.0f) * pow(5.0f * _L_A, 1.0f / 3.0f); // TODO 0.2 * 5 ... pow(, s)
-    F_L[stage]       = _F_L / nl_normalise;
+    F_L[stage]       = _F_L / nl_normalise; //TODO white scale?
 
     // # FWd Step 1
     // # Converting *CIE XYZ* tristimulus values to sharpened *RGB* values.
@@ -1652,8 +1646,8 @@ local:
     // line from origin to J,M Max       l1(x) = J/M * x
     // line from J Intersect' with slope l2(x) = slope * x + Intersect'
 
-    //return shifted_intersecion / ((J_max / M_max) - slope);
-    return shifted_intersecion * M_max / (J_max - slope * M_max);
+    return shifted_intersecion / ((J_max / M_max) - slope);
+    //return shifted_intersecion * M_max / (J_max - slope * M_max);
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
@@ -1673,9 +1667,9 @@ local:
     const float M_boundary_upper = estimate_line_and_boundary_intersection_M(f_J_intersect_source, -slope, gamma_top, f_JM_cusp_J, JM_cusp.y, f_J_intersect_cusp);
 
     // Smooth minimum between the two calculated values for the M component
-    //const float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
-    //return M_boundary;
-    return smin_s(M_boundary_lower, M_boundary_upper, smoothness, JM_cusp.y);
+    const float M_boundary = JM_cusp.y * smin(M_boundary_lower / JM_cusp.y, M_boundary_upper / JM_cusp.y, smoothness);
+    return M_boundary;
+    //return smin_s(M_boundary_lower, M_boundary_upper, smoothness, JM_cusp.y);
   }
 
   inline float reinhard_compress(const float scale, const float factor, bool direction)
@@ -1724,10 +1718,12 @@ local:
     const float ganutBoundaryM   = findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ,
                                                                   smoothness, estimated_hull_gammas, slope);
 
-    //if (ganutBoundaryM <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
-    //{
-    //  return float2(JM.x, 0.0f);
-    //}
+    if (ganutBoundaryM <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
+    {
+      //return float2(999, ganutBoundaryM);
+      return float2(JM.x, 0.0f);
+    }
+      //return float2(JM.x, ganutBoundaryM);
 
     // Compress the out of gamut color along the projection line
     const float reachMax = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
@@ -1776,7 +1772,7 @@ local:
 
     float  Jx         = JMh.x;
     float2 JM         = float2{JMh.x, JMh.y};
-    float  slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax,_focusAdjustGain, analytical_threshold);
+    float  slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _focusAdjustGain, analytical_threshold);
  
     if (INVERSE == direction)
     {
@@ -1837,13 +1833,13 @@ local:
     // Assumes Y is >= +0.0
     const float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
     const float h = max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
-    return h * aces_ts_n;
+    return h * _XYZ_w_scaler; // TODO: another normalised number
   }
 
   inline float aces_ts_rev(const float Y)
   {
     //Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
-    const float h = Y / aces_ts_n;
+    const float h = Y / _XYZ_w_scaler;
     const float f = (h + sqrt(h * (4.0f * aces_ts_t_1 + h))) / 2.0f;
     return  aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
   }
@@ -2182,7 +2178,11 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int index = int(src.z) % 8;
         output = reach_cusp_corners[index];
     }
-
+    else if (105 == diagnosticMode)
+    {
+        const int index = int(src.z) % 8;
+        output = display_JMh_corners[index];
+    }
     else
     {
         output = src;
