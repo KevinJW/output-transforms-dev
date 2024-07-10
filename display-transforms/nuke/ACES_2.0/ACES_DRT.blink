@@ -796,6 +796,18 @@ local:
     return high;
   }
 
+  void fill_initial_hull_gammas(float4 * table, float upperHullGamma, float lowerHullGamma)
+  {
+    upperHullGamma = 1.0f / upperHullGamma;
+    lowerHullGamma = 1.0f / lowerHullGamma;
+    for (int i = 0; i < totalTableSize; ++i)
+    {
+      table[i][UPPER_GAMMA] = upperHullGamma;
+      table[i][LOWER_GAMMA] = lowerHullGamma;
+    }
+
+  }
+
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
   {
     if (newLimitRGB.x < 0.0f || newLimitRGB.y < 0.0f || newLimitRGB.z < 0.0f ||
@@ -855,66 +867,61 @@ local:
 
     // positions between the cusp and Jmax we will check
     // variables that get set as we iterate through, once all are set to true we break the loop
-    const int   test_count                = 3;
-    const float testPositions[test_count] = {0.01f, 0.5f, 0.99f};
-    const float fixed_gamma = 1.0f / upperHullGamma;
-    for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
+    const int   test_count                = 5;
+    const float testPositions[test_count] = {0.01f, 0.1f, 0.5f, 0.8f, 0.99f};
+    if (!disableUpperHullGamma)
     {
-      table[i][UPPER_GAMMA] = -1.0f;
-      if (disableUpperHullGamma)
+      for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
       {
-        table[i][UPPER_GAMMA] = fixed_gamma;
-        continue;
-      }
+        //  default value. This will get overridden as we loop, but can be a good diagnostic to make sure things are working
+        const float  hue                 = hueTable[i];
+        const float4 cusp                = table[i];
+        const float2 JMcusp              = float2(cusp.x, cusp.y);
 
-      //  default value. This will get overridden as we loop, but can be a good diagnostic to make sure things are working
-      const float  hue                 = hueTable[i];
-      const float4 cusp                = table[i];
-      const float2 JMcusp              = float2(cusp.x, cusp.y);
-
-      float3 testJmh[test_count];
-      for (int testIndex = 0; testIndex < test_count; ++testIndex)
-      {
-        // create test values between the cusp and the Jmax
-        testJmh[testIndex] = float3(JMcusp.x + ((limitJmax - JMcusp.x) * testPositions[testIndex]), JMcusp.y, hue);
-      }
-
-      const float search_range = gammaSearchStep;
-      float       low          = gammaMinimum;
-      float       high         = low + search_range;
-      bool        all_inside   = true;
-
-      while (all_inside && high < gammaMaximum)
-      {
-        const float2 estimated_hull_gammas = float2(high, 1.0f / lowerHullGamma);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
-                                             luminance, conditions);
-        if (all_inside)
+        float3 testJmh[test_count];
+        for (int testIndex = 0; testIndex < test_count; ++testIndex)
         {
-          low  = high;
-          high = high + search_range;
+          // create test values between the cusp and the Jmax
+          testJmh[testIndex] = float3(JMcusp.x + ((limitJmax - JMcusp.x) * testPositions[testIndex]), JMcusp.y, hue);
         }
-      }
 
-      float testGamma = -1.0;
-      while ((high - low) > gammaAccuracy)
-      {
-        testGamma  = midpoint(low, high);
-        const float2 estimated_hull_gammas = float2(testGamma, 1.0f / lowerHullGamma);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
-                                             luminance, conditions);
-        if (!all_inside)
+        const float search_range = gammaSearchStep;
+        float       low          = gammaMinimum;
+        float       high         = low + search_range;
+        bool        all_inside   = true;
+
+        while (all_inside && high < gammaMaximum)
         {
-          high = testGamma;
+          const float2 estimated_hull_gammas = float2(high, table[i][LOWER_GAMMA]);
+          all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                              base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                              luminance, conditions);
+          if (all_inside)
+          {
+            low  = high;
+            high = high + search_range;
+          }
         }
-        else
+
+        float testGamma = -1.0;
+        while ((high - low) > gammaAccuracy)
         {
-          low = testGamma;
+          testGamma  = midpoint(low, high);
+          const float2 estimated_hull_gammas = float2(testGamma, table[i][LOWER_GAMMA]);
+          all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                              base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                              luminance, conditions);
+          if (!all_inside)
+          {
+            high = testGamma;
+          }
+          else
+          {
+            low = testGamma;
+          }
         }
+        table[i][UPPER_GAMMA] = testGamma;
       }
-      table[i][UPPER_GAMMA] = testGamma;
     }
     // Wrap the end entries
     table[0] = table[baseIndex + gamutCuspTableSize - 1];
@@ -935,64 +942,60 @@ local:
                                    const float luminance, const int conditions)
   {
     // Same process, for the bottom hull gamma
-    const int   test_count                = 3;
-    const float testPositions[test_count] = {0.01f, 0.4f, 0.75f};
+    const int   test_count                = 5;
+    const float testPositions[test_count] = {0.01f, 0.1f, 0.4f, 0.6f, 0.75f};
     const float fixed_gamma = 1.0f / lowerHullGamma;
-    for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
+    if (!disableLowerHullGamma)
     {
-      if (disableLowerHullGamma)
+      for (int i = baseIndex; i < baseIndex + gamutCuspTableSize; ++i)
       {
-        table[i][LOWER_GAMMA] = fixed_gamma;
-        continue;
-      }
+        const float4 cusp   = table[i];
+        const float2 JMcusp = float2(cusp.x, cusp.y);
+        const float  hue    = hueTable[i];
 
-      table[i][LOWER_GAMMA]    = -5.0f;
-      const float4 cusp   = table[i];
-      const float2 JMcusp = float2(cusp.x, cusp.y);
-      const float  hue    = hueTable[i];
-
-      float3       testJmh[test_count];
-      for (int testIndex = 0; testIndex < test_count; ++testIndex)
-      {
-        testJmh[testIndex] = float3(JMcusp.x * testPositions[testIndex], JMcusp.y, hue);
-      }
-
-      const float search_range = gammaSearchStep;
-      float       low          = gammaMinimum;
-      float       high         = low + search_range;
-      bool        all_inside   = true;
-
-      while (all_inside && high < gammaMaximum)
-      {
-        const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, high);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
-                                             luminance, conditions);
-        if (all_inside)
+        float3       testJmh[test_count];
+        for (int testIndex = 0; testIndex < test_count; ++testIndex)
         {
-          low  = high;
-          high = high + search_range;
+          testJmh[testIndex] = float3(JMcusp.x * testPositions[testIndex], JMcusp.y, hue);
         }
-      }
 
-      float testGamma = -1.0;
-      while ((high - low) > gammaAccuracy)
-      {
-        testGamma  = midpoint(low, high);
-        const float2 estimated_hull_gammas = float2(1.0f / upperHullGamma, testGamma);
-        all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
-                                             base_slope, midJ, cuspMidBlend, focusAdjustGain,
-                                             luminance, conditions);
-        if (!all_inside)
+        const float search_range = gammaSearchStep;
+        float       low          = gammaMinimum;
+        float       high         = low + search_range;
+        bool        all_inside   = true;
+
+        while (all_inside && high < gammaMaximum)
         {
-          high = testGamma;
+          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], high);
+          all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                              base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                              luminance, conditions);
+          if (all_inside)
+          {
+            low  = high;
+            high = high + search_range;
+          }
         }
-        else
+
+        float testGamma = -1.0;
+        while ((high - low) > gammaAccuracy)
         {
-          low = testGamma;
+          testGamma  = midpoint(low, high);
+          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], testGamma);
+          all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax,
+                                              base_slope, midJ, cuspMidBlend, focusAdjustGain,
+                                              luminance, conditions);
+          if (!all_inside)
+          {
+            high = testGamma;
+          }
+          else
+          {
+            low = testGamma;
+          }
         }
+        table[i][LOWER_GAMMA] = testGamma;
       }
-      table[i][LOWER_GAMMA] = testGamma;
     }
     table[0] = table[baseIndex + gamutCuspTableSize - 1];
     table[baseIndex + gamutCuspTableSize] = table[baseIndex];
@@ -1169,8 +1172,13 @@ local:
     initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
     extract_hue_table(limitingGamutCuspTable, hueTable);
     smooth_cusp_table(limitingGamutCuspTable, smooth_cusp_scale);
-    initialise_upper_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
-    initialise_lower_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+    fill_initial_hull_gammas(limitingGamutCuspTable, upperHullGamma, lowerHullGamma);
+    // Iterate gamma finding based on previous values
+    for (int i = 0; i != 5; ++i)
+    {
+      initialise_upper_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+      initialise_lower_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _peakLuminance, DISPLAY_CONDITIONS);
+    }
     repair_broken_gamma_values(limitingGamutCuspTable);
 
     float4 compressionGamutCuspTable[totalTableSize];
