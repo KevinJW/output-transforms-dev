@@ -1724,8 +1724,8 @@ local:
     // Assumes _compressionFuncParams in (0.0, 1.0)
     const float threshold = clamp(gamutBoundary / reachBoundary, _compressionFuncParams, 0.99999f) * gamutBoundary;
 
-    // Values upto the threshold
-    if (location <= threshold)
+    // Values upto the threshold or when both boundaries are the same remain as is
+    if (location <= threshold || gamutBoundary == reachBoundary)
       return location;
 
     // Translate to place threshold at zero
@@ -1755,10 +1755,8 @@ local:
 
     if (ganutBoundaryM <= 0.0f) // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
     {
-      //return float2(999, ganutBoundaryM);
       return float2(JM.x, 0.0f);
     }
-      //return float2(JM.x, ganutBoundaryM);
 
     // Compress the out of gamut color along the projection line
     const float reachMax = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
