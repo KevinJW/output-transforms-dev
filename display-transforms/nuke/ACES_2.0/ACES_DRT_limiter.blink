@@ -108,7 +108,7 @@ local:
   {
     if (which == 0)
     {
-      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f, 0);
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653f), float2(0.0f, 1.0f), float2(0.0001f, -0.077f), float2(0.32168f, 0.33767f), 1.0f, 0);
     }
     else if (which == 1)
     {
@@ -138,8 +138,7 @@ local:
 
   void init()
   {
-    float identity_matrix_data[] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-    identity_matrix.setArray(identity_matrix_data);
+    identity_matrix.setIdentity();
 
     RGB_to_XYZ = generate_RGB_to_XYZ_matrix(limitingPrimaries);
     XYZ_to_RGB = RGB_to_XYZ.invert();
