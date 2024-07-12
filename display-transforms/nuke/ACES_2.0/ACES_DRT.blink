@@ -1721,11 +1721,11 @@ local:
 
   inline float gamut_mapped_location(float location, const float gamutBoundary, const float reachBoundary, bool direction)
   {
-    // Assumes _compressionFuncParams in [0.0, 1.0]
-    const float threshold = max(_compressionFuncParams, gamutBoundary / reachBoundary) * gamutBoundary;
+    // Assumes _compressionFuncParams in (0.0, 1.0)
+    const float threshold = clamp(gamutBoundary / reachBoundary, _compressionFuncParams, 0.99999f) * gamutBoundary;
 
-    // Values upto the threshold or when both boundaries are the same remain as is
-    if (location <= threshold || threshold == gamutBoundary)
+    // Values upto the threshold
+    if (location <= threshold)
       return location;
 
     // Translate to place threshold at zero
