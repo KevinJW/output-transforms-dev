@@ -216,11 +216,17 @@ local:
 #define REACHCUSPM 0
 #define REACHM 1
 
-  float3 reach_cusp_corners[8];
-  float3 reach_JMh_corners[8];
+#define cuspCornerCount 6
+#define totalCornerCount cuspCornerCount + additonal_entries
 
-  float3 display_cusp_corners[8];
-  float3 display_JMh_corners[8];
+  float3 reach_cusp_corners[totalCornerCount];
+  float3 reach_JMh_corners[totalCornerCount];
+
+  float3 display_cusp_corners[totalCornerCount];
+  float3 display_JMh_corners[totalCornerCount];
+
+  float cube_hues[2*cuspCornerCount];
+  int unique_hues;
 
   float3 inputWhite;
   float3 limitWhite;
@@ -246,6 +252,7 @@ local:
   float aces_ts_u_2;
   float aces_ts_m_2;
   float aces_ts_inv_upper_limit;
+  float input_upper_clamp;
 
   void define()
   {
@@ -263,7 +270,7 @@ local:
     defineParam(_outputViewingConditions, "Output Viewing Conditions", 1);
     defineParam(L_A_out, "Output Adapting Luminance", 100.0f); // Note these are rediculously wrong should be nearer 20% of diffuse white
     defineParam(Y_b_out, "Output Background Luminance", 20.0f); // Note these are rediculously wrong depends on viewing conditions
-    defineParam(_userSurround, "User Surround Parameters", float3(0.9, 0.59, 0.9));
+    defineParam(_userSurround, "User Surround Parameters", float3(0.9f, 0.59f, 0.9f));
 
     defineParam(_XYZ_w_scaler, "XYZ White Scaler", 100.0f);
 
@@ -374,7 +381,7 @@ local:
   {
     if (PRIMARIES_AP0 == which)
     {
-      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653), float2(0.0f, 1.0f), float2(0.0001, -0.077), float2(0.32168f, 0.33767f), 1.0f,
+      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653f), float2(0.0f, 1.0f), float2(0.0001f, -0.077f), float2(0.32168f, 0.33767f), 1.0f,
                                  FORWARDS);
     }
     else if (PRIMARIES_AP1 == which)
@@ -437,17 +444,17 @@ local:
     if (condition == 0)
     {
       // "Dark": InductionFactors_CIECAM02(0.8, 0.525, 0.8),
-      newSurround = float3(0.8, 0.525, 0.8);
+      newSurround = float3(0.8f, 0.525f, 0.8f);
     }
     else if (condition == 1)
     {
       // "Dim": InductionFactors_CIECAM02(0.9, 0.59, 0.9),
-      newSurround = float3(0.9, 0.59, 0.9);
+      newSurround = float3(0.9f, 0.59f, 0.9f);
     }
     else if (condition == 2)
     {
       // "Average": InductionFactors_CIECAM02(1, 0.69, 1),
-      newSurround = float3(1.0, 0.69, 1.0);
+      newSurround = float3(1.0f, 0.69f, 1.0f);
     }
     else if (condition == 3)
     {
@@ -536,11 +543,11 @@ local:
     generate_panlrcm(2.0f, 0.05f); // TODO: for now these are constants matching the original CAM weights.
   }
 
-  void init_chroma_compression(float log_peak)
+  void init_chroma_compression(const float peakLuminance, const float log_peak)
   {
     _compr   = chroma_compress + (chroma_compress * chroma_compress_fact) * log_peak;
     _sat     = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak); // TODO; magic number
-    _sat_thr = chroma_expand_thr / aces_ts_n;
+    _sat_thr = chroma_expand_thr / peakLuminance;
   }
 
   inline float compute_base_exponential_nonlinearity(float Y_background, float Y_white)
@@ -548,7 +555,7 @@ local:
     return 1.48f + sqrt(Y_background / Y_white);
   }
 
-  void init_gamut_mapper(float log_peak)
+  void init_gamut_mapper(const float peakLuminance, const float log_peak)
   {
     clamped_smoothness  = max(0.000001f, _smoothCusps); // TODO: max() needed because smin() would have a divide by zero?
     smooth_cusp_scale = 1.0f + _smoothOffset * clamped_smoothness;
@@ -560,7 +567,7 @@ local:
     // these are used as limiting values for the gamut boundary searches
     // limitJmax (assumed to match limitRGB white)
     // BUG: this fails for HK mode as HK will be increased for highly saturated colours above white
-    _limitJmax = linear_RGB_to_JMh(float3(_peakLuminance), RGB_to_XYZ_limit, DISPLAY_CONDITIONS).x;
+    _limitJmax = linear_RGB_to_JMh(float3(peakLuminance), RGB_to_XYZ_limit, DISPLAY_CONDITIONS).x;
     _model_gamma = 1.0f / (viewingConditionsToSurround(_outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
     _base_slope = _limitJmax * _focusDist;
   }
@@ -597,38 +604,81 @@ local:
     return RGB;
   }
 
-  void build_cusp_corners_tables(float3 RGB_corners[8], float3 JMh_corners[8], const int rgb_conditions, const float3x3& rgb_matrix, const float peak)
+  void build_cusp_corners_tables(float3 RGB_corners[totalCornerCount], float3 JMh_corners[totalCornerCount], const int rgb_conditions, const float3x3& rgb_matrix, const float peakLuminance)
   {
-    // Calculate hues for corners
-#define cuspCornerCount 6
     float3 temp_cusp_corners[cuspCornerCount];
     float3 temp_JMh_corners[cuspCornerCount];
     int min_index = 0;
     for (int i = 0; i != cuspCornerCount; ++i)
     {
-      // Generage order R, Y, G, C, B, M
-      temp_cusp_corners[i] = peak * float3(int(((i+1)%cuspCornerCount) < 3), int(((i+5)%cuspCornerCount) < 3), int(((i+3)%cuspCornerCount) < 3));
+      // Generation order R, Y, G, C, B, M to ensure hues rotate in correct order
+      temp_cusp_corners[i] = peakLuminance * float3(int(((i+1)%cuspCornerCount) < 3), int(((i+5)%cuspCornerCount) < 3), int(((i+3)%cuspCornerCount) < 3));
       temp_JMh_corners[i] = linear_RGB_to_JMh(temp_cusp_corners[i], rgb_matrix, rgb_conditions);
       if (temp_JMh_corners[i].z < temp_JMh_corners[min_index].z)
         min_index = i;
     }
+
+    // Rotate entries placing lowest at [1] (not [0])
     for (int i = 0; i != cuspCornerCount; ++i)
     {
       RGB_corners[i + 1] = temp_cusp_corners[(i + min_index) % cuspCornerCount];
       JMh_corners[i + 1] = temp_JMh_corners[(i + min_index) % cuspCornerCount];
     }
+
+    // Copy end elements to create a cycle
     RGB_corners[0]                   = RGB_corners[cuspCornerCount];
     RGB_corners[cuspCornerCount+1]   = RGB_corners[1];
     JMh_corners[0]                   = JMh_corners[cuspCornerCount];
     JMh_corners[cuspCornerCount+1]   = JMh_corners[1];
+
+    // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, hue_limit)
     JMh_corners[0].z                 = JMh_corners[0].z - hue_limit;
     JMh_corners[cuspCornerCount+1].z = JMh_corners[cuspCornerCount+1].z + hue_limit;
   }
 
-  float2 find_reach_cusp_for_hue(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float peak, const float tollerance)
+  const int extract_sorted_cube_hues(float sorted_hues[12], const float3 reach_JMh[totalCornerCount], const float3 display_JMh[totalCornerCount])
   {
+    // Basic merge of 2 sorted arrays, extracting the unique hues.
+    // Returnthe count of the unique hues
+    int idx = 0;
+    int reach_idx = 1;
+    int display_idx = 1;
+    while ((reach_idx < (cuspCornerCount + 1)) || (display_idx < (cuspCornerCount + 1)))
+    {
+      const float reach_hue = reach_JMh[reach_idx].z;
+      const float display_hue = display_JMh[display_idx].z;
+      if (reach_hue == display_hue)
+      {
+        sorted_hues[idx] = reach_hue;
+        ++reach_idx;
+        ++display_idx; // When equal consume both
+      }
+      else
+      {
+        if (reach_hue < display_hue)
+        {
+          sorted_hues[idx] = reach_hue;
+          ++reach_idx;
+        }
+        else
+        {
+          sorted_hues[idx] = display_hue;
+          ++display_idx;
+        }
+      }
+      ++idx;
+    }
+    return idx;
+  }
+
+  float2 find_reach_cusp_for_hue(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float tollerance)
+  {
+    // This works by finding the required line segment between two of the RGB cusp corners, then binary searching
+    // along the line calculating the JMh of points along the line till we find the required value.
+    // All values on the line segments are valid cusp locations.
+
     int upper_corner = 1;
-    for (int i = 1; i != 8; ++i) // TODO: binary search?
+    for (int i = upper_corner; i != totalCornerCount; ++i) // TODO: binary search?
     {
        if (reach_JMh_corners[i].z > hue)
        {
@@ -638,21 +688,27 @@ local:
     }
     const int lower_corner = upper_corner - 1;
 
-    // search by lerping between corners for the hue
-    const float3 cusp_lower = reach_cusp_corners[lower_corner];
-    const float3 cusp_upper = reach_cusp_corners[upper_corner];
-
-    float lower_t = 0.0f;
-    float upper_t = 1.0f;
-
-    float3 JMh;
+    // hue should now be within [lower_corner, upper_corner), handle exact match
     if (reach_JMh_corners[lower_corner].z == hue)
     {
       return float2(reach_JMh_corners[lower_corner].x, reach_JMh_corners[lower_corner].y);
     }
+ 
+    // search by lerping between RGB corners for the hue
+    const float3 cusp_lower = reach_cusp_corners[lower_corner];
+    const float3 cusp_upper = reach_cusp_corners[upper_corner];
     float3 sample;
+
     float sample_t;
-    if (upper_corner > 6)
+    float lower_t = 0.0f;
+    float upper_t = 1.0f;
+
+    float3 JMh;
+
+    // There is an edge case where we need to search towards the range when across the [0.0f, hue_limit) boundary
+    // each edge needs the directions swapped. This is handled by comparing against the appropriate corner to make
+    // sure we are still in the expected range between the lower and upper corner hue limits
+    if (upper_corner > cuspCornerCount)
     {
       while((upper_t - lower_t) > tollerance)
       {
@@ -671,6 +727,8 @@ local:
     }
     else
     {
+      // Note the following corner comparison is only needed for the loweest line segment but to avoid more duplication
+      // we can use it for all the remaining segments as it still produces the correct result 
       while((upper_t - lower_t) > tollerance)
       {
         sample_t = midpoint(lower_t, upper_t);
@@ -686,6 +744,8 @@ local:
         }
       }
     }
+
+    // Use the midpoint of the final interval for the actual sampls
     sample_t = midpoint(lower_t, upper_t);
     sample = lerp(cusp_lower, cusp_upper, sample_t);
     JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
@@ -751,14 +811,14 @@ local:
     }
   }
 
-  void precompute_reach_table(float2 * reachMTable, float4 * reach_table, const float limitJ, const float3x3& xyz_matrix,
-                              const float3x3& rgb_matrix, const int conditions, const float peak)
+  void precompute_reach_table(float2 * reachMTable, const float limitJ, const float3x3& xyz_matrix,
+                              const float3x3& rgb_matrix, const int conditions)
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
       const float hue = hueTable[i];
-      //float2 JM = find_reach_cusp_for_hue(hue, rgb_matrix, conditions, peak, hueFindingTollerance);
-      reachMTable[i][REACHCUSPM] = compressionCuspFromTable(hue, reach_table).y; // Resample compression cusp for Disply hues save on extra binary search 
+      float2 JM = find_reach_cusp_for_hue(hue, rgb_matrix, conditions, hueFindingTollerance);
+      reachMTable[i][REACHCUSPM] = JM.y; 
       reachMTable[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
     }
   }
@@ -1154,20 +1214,19 @@ local:
 
   void init()
   {
-    init_tonescale_constants(_peakLuminance);
-
-    const float log_peak = log10(aces_ts_n / aces_ts_n_r);
+    const float log_peak = init_tonescale_constants(_peakLuminance);
 
     init_matrices();
 
     precompute_hellwig(inputWhite, _XYZ_w_scaler, _inputViewingConditions, L_A_in, Y_b_in, false, true, SOURCE_CONDITIONS);
     precompute_hellwig(limitWhite, _XYZ_w_scaler, _outputViewingConditions, L_A_out, Y_b_out, false, true, DISPLAY_CONDITIONS);
 
-    init_chroma_compression(log_peak);
-    init_gamut_mapper(log_peak);
+    init_chroma_compression(_peakLuminance, log_peak);
+    init_gamut_mapper(_peakLuminance, log_peak);
 
     build_cusp_corners_tables(reach_cusp_corners, reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _peakLuminance);
     build_cusp_corners_tables(display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, RGB_to_XYZ_limit, _peakLuminance);
+    unique_hues = extract_sorted_cube_hues(cube_hues, reach_JMh_corners, display_JMh_corners);
 
     initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
     extract_hue_table(limitingGamutCuspTable, hueTable);
@@ -1181,9 +1240,7 @@ local:
     }
     repair_broken_gamma_values(limitingGamutCuspTable);
 
-    float4 compressionGamutCuspTable[totalTableSize];
-    initialise_cusp_table(compressionGamutCuspTable, AP1_to_XYZ, _peakLuminance, SOURCE_CONDITIONS);
-    precompute_reach_table(reachMTable, compressionGamutCuspTable, _limitJmax, XYZ_to_AP1, AP1_to_XYZ, SOURCE_CONDITIONS, _peakLuminance);
+    precompute_reach_table(reachMTable, _limitJmax, XYZ_to_AP1, AP1_to_XYZ, SOURCE_CONDITIONS);
   }
 
 #ifdef USE_DEGREES
@@ -1227,7 +1284,7 @@ local:
     if (AP1Clamp)
     {
       float3 RGB = vector_dot(XYZ_to_AP1, XYZ);
-      RGB        = clamp(RGB, float3{0.0f}, float3(16384.0f)); // limit to nice power of 2 above that needed to max out a 10000 Nit output transform
+      RGB        = clamp(RGB, float3{0.0f}, float3(input_upper_clamp));
       XYZ        = vector_dot(AP1_to_XYZ, RGB);
     }
     return XYZ;
@@ -1247,13 +1304,13 @@ local:
 
   inline float _post_adaptation_non_linear_response_compression_inverse(float A)
   {
-    const float F_L_A = (nl_offset * A) / (1.0 - A);
+    const float F_L_A = (nl_offset * A) / (1.0f - A);
     return pow(F_L_A, 1.0f / nl_gamma);
   }
 
   inline float3 _post_adaptation_non_linear_response_compression_inverse(float3 RGB)
   {
-    const float3 F_L_RGB = (nl_offset * RGB) / (1.0 - RGB);
+    const float3 F_L_RGB = (nl_offset * RGB) / (1.0f - RGB);
     const float3 RGB_p   = pow(F_L_RGB, float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
     return RGB_p;
   }
@@ -1538,36 +1595,6 @@ local:
     return lerp(limitingGamutCuspTable[pos - 1], limitingGamutCuspTable[pos], t);
   }
 
-  float4 compressionCuspFromTable(float wrapped_hue, float4 * compressionGamutCuspTable)
-  {
-    // Avoid use within main pixel loop
-    float4 lo;
-    float4 hi;
-
-    int low_i  = 0;
-    int high_i = baseIndex + gamutCuspTableSize; // Allowed as we have extra entry in the table
-    int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
-
-    while (low_i + 1 < high_i)
-    {
-      if (wrapped_hue > compressionGamutCuspTable[i].z)
-      {
-        low_i = i;
-      }
-      else
-      {
-        high_i = i;
-      }
-      i = midpoint(low_i, high_i);
-    }
-    lo = compressionGamutCuspTable[high_i - 1];
-    hi = compressionGamutCuspTable[high_i];
-
-    float t = (wrapped_hue - lo.z) / (hi.z - lo.z);
-
-    return lerp(lo, hi, t);
-  }
-
   inline float2 reachMFromTable(int pos, float t)
   {
     return lerp(reachMTable[pos - 1], reachMTable[pos], t);
@@ -1814,13 +1841,16 @@ local:
     return RGB;
   }
 
-  void init_tonescale_constants(float peakLuminance)
+  float init_tonescale_constants(float peakLuminance)
   {
     // pre-calculate aces_ts  constants
     // TODO: this is a mess, tidy up 100.0 and 10000 constants, plus factor out equations into clearer functions
+
     aces_ts_n = peakLuminance;
-    const float aces_ts_r_hit  = aces_ts_r_hit_min + (aces_ts_r_hit_max - aces_ts_r_hit_min) * (log(aces_ts_n / aces_ts_n_r) / log(10000.0f / 100.0f));
     const float aces_ts_m_0    = aces_ts_n / aces_ts_n_r;
+    const float aces_ts_r_hit  = aces_ts_r_hit_min + (aces_ts_r_hit_max - aces_ts_r_hit_min) * (log(aces_ts_m_0) / log(10000.0f / 100.0f));
+    input_upper_clamp = aces_ts_r_hit * 8.0f * _XYZ_w_scaler;  // limit to nice power of 2 (3 stops) above that needed to max out // TODO magic 8 ball factor needs assessing
+
     const float aces_ts_m_1    = 0.5f * (aces_ts_m_0 + sqrt(aces_ts_m_0 * (aces_ts_m_0 + 4.0f * aces_ts_t_1)));
     aces_ts_u                  = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + 1.0f), aces_ts_g);
     aces_ts_m                  = aces_ts_m_1 / aces_ts_u;
@@ -1833,6 +1863,7 @@ local:
     aces_ts_u_2                = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + aces_ts_w_2), aces_ts_g);
     aces_ts_m_2                = aces_ts_m_1 / aces_ts_u_2;
     aces_ts_inv_upper_limit    = (aces_ts_n * aces_ts_n) / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name Is it even needed?
+    return log10(aces_ts_m_0);
   }
 
   // ACES Tonescale function, proposed by Daniele Siragusano
@@ -2173,23 +2204,32 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (102 == diagnosticMode)
     {
-        float2 found = find_reach_cusp_for_hue(src.z, AP1_to_XYZ, SOURCE_CONDITIONS, src.x, hueFindingTollerance);
+        float2 found = find_reach_cusp_for_hue(src.z, AP1_to_XYZ, SOURCE_CONDITIONS, hueFindingTollerance);
         output = float3(found.x, found.y, src.z);
     }
     else if (103 == diagnosticMode)
     {
-        const int index = int(src.z) % 8;
+        const int index = int(src.z) % totalCornerCount;
         output = reach_JMh_corners[index];
     }
     else if (104 == diagnosticMode)
     {
-        const int index = int(src.z) % 8;
+        const int index = int(src.z) % totalCornerCount;
         output = reach_cusp_corners[index];
     }
     else if (105 == diagnosticMode)
     {
-        const int index = int(src.z) % 8;
+        const int index = int(src.z) % totalCornerCount;
         output = display_JMh_corners[index];
+    }
+    else if (106 == diagnosticMode)
+    {
+        output = float3(input_upper_clamp / _XYZ_w_scaler);
+    }
+    else if (107 == diagnosticMode)
+    {
+        const int index = int(src.z) % (2 * cuspCornerCount);
+        output = float3(cube_hues[index], index, unique_hues);
     }
     else
     {
