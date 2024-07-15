@@ -2,29 +2,30 @@ set cut_paste_input [stack 0]
 version 13.2 v8
 push $cut_paste_input
 Group {
- name ACESDRT_EncodingLimiter
+ name ACESDRT_EncodingLimiter1
  selected true
- xpos 10
- ypos -65
+ xpos -5
+ ypos -78
  addUserKnob {20 User}
  addUserKnob {26 _1 l "Limiting Gamut"}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Limiting Peak Luminance" l "Limiting Peak Luminance" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Limiting Peak Luminance"}
- addUserKnob {4 limiting_whitepoint l Whitepoint M {"Illuminant E" ACES D65 DCI Custom "" "" "" ""}}
- limiting_whitepoint ACES
- addUserKnob {4 limiting_primaries l "" t "the limiting primaries of the gamut to which to compress to" -STARTLINE M {XYZ AP0-ACES AP1-ACES "Rec.709  (sRGB)" Rec.2020 P3 Custom "" "" ""}}
+ addUserKnob {4 limiting_whitepoint l Whitepoint M {"Illuminant E" ACES D65 DCI Custom ""}}
+ limiting_whitepoint D65
+ addUserKnob {4 limiting_primaries l "" t "the limiting primaries of the gamut to which to compress to" -STARTLINE M {XYZ AP0-ACES AP1-ACES "Rec.709  (sRGB)" Rec.2020 P3 Custom ""}}
  limiting_primaries "Rec.709  (sRGB)"
  addUserKnob {20 Custom l "Custom Gamut" n 1}
+ Custom 0
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Custom Red" l "Custom Red" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Custom Red"}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Custom Green" l "Custom Green" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Custom Green"}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Custom Blue" l "Custom Blue" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Custom Blue"}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Custom White" l "Custom White" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Custom White"}
  addUserKnob {20 endGroup n -1}
  addUserKnob {26 _2 l Encoding}
- addUserKnob {4 encoding_whitepoint l Whitepoint -STARTLINE M {"Illuminant E" ACES D65 DCI Custom "" "" ""}}
+ addUserKnob {4 encoding_whitepoint l Whitepoint -STARTLINE M {"Illuminant E" ACES D65 DCI Custom ""}}
  encoding_whitepoint D65
  addUserKnob {4 encoding_primaries l "" -STARTLINE M {XYZ AP0-ACES AP1-ACES "Rec.709  (sRGB)" Rec.2020 P3 Custom "" "" "" ""}}
  encoding_primaries "Rec.709  (sRGB)"
- addUserKnob {26 "" +STARTLINE}
+ addUserKnob {26 ""}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_Clamp to limiting space" l "Clamp to limiting space" T "BlinkScript1.ACES_DRT_Encoding_Kernel_Clamp to limiting space"}
  addUserKnob {41 "ACES_DRT_Encoding_Kernel_White point scale" l "White point scale" T "BlinkScript1.ACES_DRT_Encoding_Kernel_White point scale"}
  addUserKnob {26 ""}
