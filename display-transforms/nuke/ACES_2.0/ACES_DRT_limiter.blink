@@ -7,41 +7,68 @@ param:
   //
   // Input Parameters
   //
+#define FORWARDS false
+#define INVERSE  true
   bool invert;
 
   // Primaries of the Input Image
-  // 0: AP0-ACES
-  // 1: AP1-ACES
-  // 2: sRGB/Rec.709-D65
-  // 3: Rec.2020-D65
-  // 4: P3-D65
-  // 5: P3-DCI
-  // 6: XYZ
+  // 0: XYZ
+  // 1: AP0-ACES
+  // 2: AP1-ACES
+  // 3: sRGB/Rec.709-D65
+  // 4: Rec.2020-D65
+  // 5: P3-D65
+  // 6: Custom
   int limitingPrimaries;
   int encodingPrimaries;
 
+  // White point of the limiting gamut
+  // effectively the "creative white"
+  // 0: Illuminant E
+  // 1: ACES white
+  // 2: D65
+  // 3: DCI
+  // 4: Custom
+  // Could add others, or user white point
+  int limitingWhite;
+  int encodingWhite;
+
   // Reference Luminance in Cd/sqm
-  float referenceLuminance;
+  float limitingLuminance;
 
   bool limitClamp;
   bool whitepoint_scale;
 
+  float2 custom_red;
+  float2 custom_green;
+  float2 custom_blue;
+  float2 custom_white;
+
 local:
-  float3x3 XYZ_to_RGB;
-  float3x3 RGB_to_XYZ;
-  float3x3 identity_matrix;
+  float3x3 XYZ_to_limiting_RGB;
+  float3x3 limiting_RGB_to_XYZ;
+
+  float white_scaling_factor;
+  bool white_scaled;
+  bool has_effect;
 
   void define()
   {
     defineParam(invert, "Direction", false);
-    defineParam(limitingPrimaries, "Limiting Primaries", 2);
-    defineParam(encodingPrimaries, "Encoding Primaries", 2);
-    defineParam(referenceLuminance, "Reference Luminance", 100.0f);
+    defineParam(limitingLuminance, "Limiting Peak Luminance", 100.0f);
+    defineParam(limitingPrimaries, "Limiting Primaries", 3);
+    defineParam(limitingWhite, "Limiting Whitepoint", 2);
+    defineParam(encodingPrimaries, "Encoding Primaries", 3);
+    defineParam(encodingWhite, "Encoding Whitepoint", 2);
     defineParam(limitClamp, "Clamp to limiting space", true);
     defineParam(whitepoint_scale, "White point scale", true);
+    defineParam(custom_red, "Custom Red", float2(0.6400f, 0.3300f));
+    defineParam(custom_green, "Custom Green", float2(0.3000f, 0.6000f));
+    defineParam(custom_blue, "Custom Blue", float2(0.1500f, 0.0600f));
+    defineParam(custom_white, "Custom White", float2(0.3127f, 0.3290f));
   }
 
-  float3x3 RGBPrimsToXYZMatrix(float2 rxy, float2 gxy, float2 bxy, float2 wxy, float Y, bool direction)
+  float3x3 RGBPrimsToXYZMatrix(float2 primaries[3], float2 wxy, float Y, bool direction)
   {
     // # given r g b chromaticities and whitepoint, convert RGB colors to XYZ
     // # based on CtlColorSpace.cpp from the CTL source code : 77
@@ -49,16 +76,16 @@ local:
     // # param: Y - luminance of "white" - defaults to 1.0
     // # param: inverse - calculate XYZ to RGB instead
 
-    float2 r = rxy;
-    float2 g = gxy;
-    float2 b = bxy;
-    float2 w = wxy;
+    const float2 r = primaries[0];
+    const float2 g = primaries[1];
+    const float2 b = primaries[2];
+    const float2 w = wxy;
 
-    float X = w.x * Y / w.y;
-    float Z = (1 - w.x - w.y) * Y / w.y;
+    const float X = w.x * Y / w.y;
+    const float Z = (1 - w.x - w.y) * Y / w.y;
 
     // # Scale factors for matrix rows
-    float d = r.x * (b.y - g.y) + b.x * (g.y - r.y) + g.x * (r.y - b.y);
+    const float d = r.x * (b.y - g.y) + b.x * (g.y - r.y) + g.x * (r.y - b.y);
 
     // clang-format off
     float Sr =    (X * (b.y - g.y) -      \
@@ -92,11 +119,11 @@ local:
     newMatrix.setArray(Mdata);
 
     // return forward or inverse matrix
-    if (direction == 0)
+    if (direction == FORWARDS)
     {
       return newMatrix;
     }
-    else if (direction == 1)
+    else if (direction == INVERSE)
     {
       // create inverse matrix
       float3x3 newMatrixInverse = newMatrix.invert();
@@ -104,92 +131,175 @@ local:
     }
   }
 
-  float3x3 generate_RGB_to_XYZ_matrix(const int which)
+  float2 get_whitepoint(int which_white, float2 custom)
   {
-    if (which == 0)
+    if (which_white == 1)
     {
-      return RGBPrimsToXYZMatrix(float2(0.7347f, 0.2653f), float2(0.0f, 1.0f), float2(0.0001f, -0.077f), float2(0.32168f, 0.33767f), 1.0f, 0);
+      return float2(0.32168f, 0.33767f);
     }
-    else if (which == 1)
+    else if (which_white == 2)
     {
-      return RGBPrimsToXYZMatrix(float2(0.713f, 0.293f), float2(0.165f, 0.830f), float2(0.128f, 0.044f), float2(0.32168f, 0.33767f), 1.0f, 0);
+      return float2(0.3127f, 0.3290f);
     }
-    else if (which == 2)
+    else if (which_white == 3)
     {
-      return RGBPrimsToXYZMatrix(float2(0.64f, 0.33f), float2(0.3f, 0.6f), float2(0.15f, 0.06f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      return float2(0.3140f, 0.3510f);
     }
-    else if (which == 3)
+    else if (which_white == 4)
     {
-      return RGBPrimsToXYZMatrix(float2(0.708f, 0.292f), float2(0.170f, 0.797f), float2(0.131f, 0.046f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      return custom;
     }
-    else if (which == 4)
+
+    // Case 0 and default
+    return float2(1.0f / 3.0f, 1.0f / 3.0f);
+  }
+
+  void get_primaries(const int primaries, const float2 custom[3], float2 primaries_out[3])
+  {
+    if (primaries == 1)
     {
-      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.3127f, 0.3290f), 1.0f, 0);
+      primaries_out[0] = float2(0.7347f, 0.2653f);
+      primaries_out[1] = float2(0.0000f, 1.0000f);
+      primaries_out[2] = float2(0.0001f, -0.0770f);
     }
-    else if (which == 5)
+    else if (primaries == 2)
     {
-      return RGBPrimsToXYZMatrix(float2(0.680f, 0.320f), float2(0.265f, 0.690f), float2(0.150f, 0.060f), float2(0.314f, 0.351f), 1.0f, 0);
+      primaries_out[0] = float2(0.7130f, 0.2930f);
+      primaries_out[1] = float2(0.1650f, 0.8300f);
+      primaries_out[2] = float2(0.1280f, 0.0440f);
+    }
+    else if (primaries == 3)
+    {
+      primaries_out[0] = float2(0.6400f, 0.3300f);
+      primaries_out[1] = float2(0.3000f, 0.6000f);
+      primaries_out[2] = float2(0.1500f, 0.0600f);
+    }
+    else if (primaries == 4)
+    {
+      primaries_out[0] = float2(0.7080f, 0.2920f);
+      primaries_out[1] = float2(0.1700f, 0.7970f);
+      primaries_out[2] = float2(0.1310f, 0.0460f);
+    }
+    else if (primaries == 5)
+    {
+      primaries_out[0] = float2(0.6800f, 0.3200f);
+      primaries_out[1] = float2(0.2650f, 0.6900f);
+      primaries_out[2] = float2(0.1500f, 0.0600f);
+    }
+    else if (primaries == 6)
+    {
+      primaries_out[0] = custom[0];
+      primaries_out[1] = custom[1];
+      primaries_out[2] = custom[1];
     }
     else
     {
-      return identity_matrix;
+      // Case 0 and default
+      primaries_out[0] = float2(1.0f, 0.0f);
+      primaries_out[1] = float2(0.0f, 1.0f);
+      primaries_out[2] = float2(0.0f, 0.0f);
     }
-  }
+ }
 
   void init()
   {
-    identity_matrix.setIdentity();
+    float2 temp_primaries[3];
+    const float2 custom_primaries[3] =
+    {
+      custom_red, custom_green, custom_blue
+    };
 
-    RGB_to_XYZ = generate_RGB_to_XYZ_matrix(limitingPrimaries);
-    XYZ_to_RGB = RGB_to_XYZ.invert();
+    get_primaries(limitingPrimaries, custom_primaries, temp_primaries);
+    const float2 limiting_whitepoint = get_whitepoint(limitingWhite, custom_white);
+    limiting_RGB_to_XYZ = RGBPrimsToXYZMatrix(temp_primaries, limiting_whitepoint, 1.0f, FORWARDS);
+    XYZ_to_limiting_RGB = limiting_RGB_to_XYZ.invert();
+
+    get_primaries(encodingPrimaries, custom_primaries, temp_primaries);
+    const float2   encoding_whitepoint = get_whitepoint(encodingWhite, custom_white);
+    const float3x3 XYZ_to_encoding_RGB = RGBPrimsToXYZMatrix(temp_primaries, limiting_whitepoint, 1.0f, INVERSE);
+
+    // Scale to fit maximum creative white channel value
+    const float3 creativeWhiteXYZ = vector_dot(limiting_RGB_to_XYZ, float3(1.0f));
+    const float3 creativeWhiteRGB = vector_dot(XYZ_to_encoding_RGB, creativeWhiteXYZ);
+    const float  max_channel      = max(creativeWhiteRGB.x, max(creativeWhiteRGB.y, creativeWhiteRGB.z));
+    white_scaling_factor          = (whitepoint_scale) ? 1.0f / max_channel : 1.0f; // TODO: add scaling into reencoding matrix?
+    white_scaled                  = (white_scaling_factor != 1.0f);
+
+    has_effect = white_scaled;
+    if (!invert)
+    {
+      has_effect |= limitClamp;
+    }
   }
 
   // multiplies a 3D vector with a 3x3 matrix
   float3 vector_dot(float3x3 m, float3 v)
   {
     float3 r;
-    for (int c = 0; c < 3; c++)
+    for (int c = 0; c != 3; ++c)
     {
-      r[c] = m[c][0] * v.x + m[c][1] * v.y + m[c][2] * v.z;
+      r[c] = m[c][0] * v[0] + m[c][1] * v[1] + m[c][2] * v[2];
     }
 
     return r;
   }
 
-  float3 apply_limiting_clamp(float3 XYZ)
+  inline float3 xyz_to_limiting(const float3 XYZ)
+  {
+    return vector_dot(XYZ_to_limiting_RGB, XYZ);
+  }
+
+  inline float3 limiting_to_xyz(const float3 RGB)
+  {
+    return vector_dot(limiting_RGB_to_XYZ, RGB);
+  }
+
+  inline float3 apply_limiting_clamp(float3 RGB)
   {
     if (limitClamp)
     {
-      XYZ = vector_dot(XYZ_to_RGB, XYZ);
-      XYZ = clamp(XYZ, float3{0.0f}, float3{referenceLuminance});
-      XYZ = vector_dot(RGB_to_XYZ, XYZ);
+      RGB = clamp(RGB, float3{0.0f}, float3{limitingLuminance});
     }
-    return XYZ;
+    return RGB;
   }
 
-  float3 apply_whitepoint_scale(float3 XYZ)
+  inline float3 apply_whitepoint_scale(float3 RGB)
   {
-    if (whitepoint_scale)
+    if (white_scaled)
     {
-      // TODO something
+      RGB *= white_scaling_factor;
     }
-    return XYZ;
+    return RGB;
   }
+
+  inline float3 remove_whitepoint_scale(float3 RGB)
+  {
+    RGB /= white_scaling_factor;
+    return RGB;
+  }
+
   void process()
   {
     SampleType(src) source = src();
-    float3 input(source.x, source.y, source.z);
-    float3 out;
+    float3 out(source.x, source.y, source.z);
 
-    if (invert)
+    if (has_effect)
     {
-      out = input; // TODO
+      if (invert)
+      {
+        out = xyz_to_limiting(out);
+        out = remove_whitepoint_scale(out);
+        out = limiting_to_xyz(out);
+      }
+      else
+      {
+        out = xyz_to_limiting(out);
+        out = apply_limiting_clamp(out);
+        out = apply_whitepoint_scale(out);
+        out = limiting_to_xyz(out);
+      }
     }
-    else
-    {
-      out = apply_limiting_clamp(input);
-      out = apply_whitepoint_scale(out);
-    }
+
     dst() = float4(out.x, out.y, out.z, source.w);
   }
 };
