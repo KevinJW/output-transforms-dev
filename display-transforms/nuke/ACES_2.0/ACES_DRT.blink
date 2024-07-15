@@ -636,7 +636,7 @@ local:
     JMh_corners[cuspCornerCount+1].z = JMh_corners[cuspCornerCount+1].z + hue_limit;
   }
 
-  const int extract_sorted_cube_hues(float sorted_hues[12], const float3 reach_JMh[totalCornerCount], const float3 display_JMh[totalCornerCount])
+  int extract_sorted_cube_hues(float sorted_hues[12], const float3 reach_JMh[totalCornerCount], const float3 display_JMh[totalCornerCount])
   {
     // Basic merge of 2 sorted arrays, extracting the unique hues.
     // Returnthe count of the unique hues
