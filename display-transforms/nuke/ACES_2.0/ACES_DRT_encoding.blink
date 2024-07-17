@@ -18,6 +18,7 @@ param:
   // 3: BT.1886 (Gamma 2.4)
   // 4: Gamma 2.6
   // 5: ST2084
+  // 6: Gamma 2.2
   int encoding;
 
   // Primaries of the Input Image
@@ -57,7 +58,8 @@ local:
   float3 st2084_c_3;
   float3 st2084_m_1_d;
   float3 st2084_m_2_d;
-  float3 st2084_L_p;
+
+  float normalisingFactor;
 
   float3x3 XYZ_to_RGB;
   float3x3 RGB_to_XYZ;
@@ -218,7 +220,10 @@ local:
     st2084_c_3   = 2392.0f / 4096.0f * 32.0f;
     st2084_m_1_d = 1.0f / st2084_m_1;
     st2084_m_2_d = 1.0f / st2084_m_2;
-    st2084_L_p   = 100.0f; // Scale so 100 is 1.0f for Nuke
+
+    normalisingFactor = referenceLuminance;
+    if (encoding == 5)
+      normalisingFactor = 10000.0f;
 
     float2 temp_primaries[3];
     const float2 custom_primaries[3] =
@@ -232,59 +237,59 @@ local:
     XYZ_to_RGB = RGB_to_XYZ.invert();
  }
 
-  float sRGB_to_linear(float v)
+  float sRGB_to_linear(const float v)
   {
     return v < 0.04045f ? v / 12.92f : pow((v + 0.055f) / 1.055f, 2.4f);
   }
 
-  float3 sRGB_to_linear3(float3 v)
+  float3 sRGB_to_linear3(const float3 v)
   {
     return float3{sRGB_to_linear(v.x), sRGB_to_linear(v.y), sRGB_to_linear(v.z)};
   }
 
-  float linear_to_sRGB(float v)
+  float linear_to_sRGB(const float v)
   {
     return v <= 0.0031308f ? 12.92f * v : 1.055f * (pow(v, 1.0f / 2.4f)) - 0.055f;
   }
 
-  float3 linear_to_sRGB3(float3 v)
+  float3 linear_to_sRGB3(const float3 v)
   {
     return float3{linear_to_sRGB(v.x), linear_to_sRGB(v.y), linear_to_sRGB(v.z)};
   }
 
-  float ACEScct_to_linear(float v)
+  float ACEScct_to_linear(const float v)
   {
     return v > 0.155251141552511f ? pow(2.0f, v * 17.52f - 9.72f) : (v - 0.0729055341958355f) / 10.5402377416545f;
   }
 
-  float3 ACEScct_to_linear3(float3 v)
+  float3 ACEScct_to_linear3(const float3 v)
   {
     return float3{ACEScct_to_linear(v.x), ACEScct_to_linear(v.y), ACEScct_to_linear(v.z)};
   }
 
-  float linear_to_ACEScct(float v)
+  float linear_to_ACEScct(const float v)
   {
     return v > 0.0078125f ? (log2(v) + 9.72f) / 17.52f : 10.5402377416545f * v + 0.0729055341958355f;
   }
 
-  float3 linear_to_ACEScct3(float3 v)
+  float3 linear_to_ACEScct3(const float3 v)
   {
     return float3{linear_to_ACEScct(v.x), linear_to_ACEScct(v.y), linear_to_ACEScct(v.z)};
   }
 
-  float3 ST2084_to_linear(float3 v)
+  float3 ST2084_to_linear(const float3 v)
   {
     float3 V_p = pow(v, st2084_m_2_d);
-    return pow((max(float3{0.0f, 0.0f, 0.0f}, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d) * st2084_L_p;
+    return pow((max(float3{0.0f, 0.0f, 0.0f}, V_p - st2084_c_1) / (st2084_c_2 - st2084_c_3 * V_p)), st2084_m_1_d);
   }
 
-  float3 linear_to_ST2084(float3 v)
+  float3 linear_to_ST2084(const float3 v)
   {
-    float3 Y_p = pow(max(float3{0.0f, 0.0f, 0.0f}, v) / st2084_L_p, st2084_m_1);
+    float3 Y_p = pow(max(float3{0.0f, 0.0f, 0.0f}, v), st2084_m_1);
     return pow((st2084_c_1 + st2084_c_2 * Y_p) / (st2084_c_3 * Y_p + 1.0f), st2084_m_2);
   }
 
-  float3 encodingToLuminance(int encoding, float3 v)
+  float3 encodingToLuminance(const int encoding, float3 v)
   {
     if (encoding == 1)
     {
@@ -296,24 +301,28 @@ local:
     }
     else if (encoding == 3)
     {
-      v = pow(v, float3{2.4f, 2.4f, 2.4f});
+      v = pow(v, float3{2.4f});
     }
     else if (encoding == 4)
     {
-      v = pow(v, float3{2.6f, 2.6f, 2.6f});
+      v = pow(v, float3{2.6f});
     }
     else if (encoding == 5)
     {
       v = ST2084_to_linear(v);
     }
+    else if (encoding == 6)
+    {
+      v = pow(v, float3{2.2f});
+    }
 
     // default Linear scaling to our reference Luminace
-    return v * referenceLuminance;
+    return v * normalisingFactor;
   }
 
   float3 luminanceToEncoding(int encoding, float3 v)
   {
-    v = v / referenceLuminance;
+    v /= normalisingFactor;
 
     if (encoding == 1)
     {
@@ -325,15 +334,19 @@ local:
     }
     else if (encoding == 3)
     {
-      return pow(v, float3{1.0f / 2.4f, 1.0f / 2.4f, 1.0f / 2.4f});
+      return pow(v, float3{1.0f / 2.4f});
     }
     else if (encoding == 4)
     {
-      return pow(v, float3{1.0f / 2.6f, 1.0f / 2.6f, 1.0f / 2.6f});
+      return pow(v, float3{1.0f / 2.6f});
     }
     else if (encoding == 5)
     {
       return linear_to_ST2084(v);
+    }
+    else if (encoding == 6)
+    {
+      return pow(v, float3{1.0f / 2.2f});
     }
 
     // default Linear scaling to our reference Luminace
