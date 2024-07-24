@@ -55,7 +55,6 @@ param:
 
   float  _XYZ_w_scaler;
 
-
   // Diagnostic path modes
 #define COMPILE_DIAGNOSTICS
 
@@ -145,8 +144,6 @@ local:
 #define PRIMARIES_P3D65 4
 #define PRIMARIES_P3DCI 5
 
-  float3x3 CAT_CAT16;
-
   float3 DL_weights[NUMBER_CONDITIONS];
   float3 DM_weights[NUMBER_CONDITIONS];
   float3 DS_weights[NUMBER_CONDITIONS];
@@ -166,8 +163,6 @@ local:
   float3 achromatic_weights_inv[NUMBER_CONDITIONS];
   float3 a_weights_inv[NUMBER_CONDITIONS];
   float3 b_weights_inv[NUMBER_CONDITIONS];
-
-  float3x3 panlrcm;
 
   float3x3 AP1_to_XYZ;
   float3x3 XYZ_to_AP1;
@@ -189,7 +184,6 @@ local:
   //bool   HK_mode[NUMBER_CONDITIONS];
   float  F_L[NUMBER_CONDITIONS];
   float3 D_RGB[NUMBER_CONDITIONS];
-  float  A_w[NUMBER_CONDITIONS];
   float  y_to_j_A_w[NUMBER_CONDITIONS];
 
 //#define USE_DEGREES
@@ -213,14 +207,14 @@ local:
   // Non-uniform in h
   float  hueTable[totalTableSize];
   float4 limitingGamutCuspTable[totalTableSize];    // { J, M, Upper gamma, Lower gamma }
-  float2 reachMTable[totalTableSize];               // { reachCuspM, reachM }
+  float reachMTable[totalTableSize];               // reachM 
 
 // Note reuse of Hue channel 2
 #define UPPER_GAMMA 2
 #define LOWER_GAMMA 3
 
-#define REACHCUSPM 0
-#define REACHM 1
+//#define REACHCUSPM 0
+//#define REACHM 1
 
 #define cuspCornerCount 6
 #define totalCornerCount cuspCornerCount + additonal_entries
@@ -245,6 +239,7 @@ local:
   float _compr;   // Compression TODO rename
   float _sat;     // Saturation TODO rename
   float _sat_thr; // Threshold to start expanding saturation
+  float chromaCompressScale; // Scaling foactor for 'cusp' normalisation factor
 
   float aces_ts_c_t;
   float aces_ts_s_2;
@@ -456,21 +451,22 @@ local:
   //  460.0f, 451.0f, 288.0f,
   //  460.0f, -891.0f, -261.0f,
   //  460.0f, -220.0f, -6300.0f
-  void generate_panlrcm(float ra, float ba)
+  float3x3 generate_panlrcm(float ra, float ba)
   {
     achromatic_w = nl_scale * float3(ra, 1.0f, ba);
     a_w          = nl_scale * float3(11.0f, -12.0f, 1.0f) / 11.0f;
     b_w          = nl_scale * float3(1.0f, 1.0f, -2.0f) / 9.0f;
 
-    panlrcm =  constuct_inverse_matrix(achromatic_w, a_w, b_w);
+    float3x3 mat =  constuct_inverse_matrix(achromatic_w, a_w, b_w);
 
     for (int i = 0; i < 3; i++)
     {
-      float n = (460.0f / panlrcm[i][0]) / 1403.0f;
-      panlrcm[i][0] *= n / nl_scale;
-      panlrcm[i][1] *= n / nl_scale;
-      panlrcm[i][2] *= n / nl_scale;
+      float n = (460.0f / mat[i][0]) / 1403.0f;
+      mat[i][0] *= n / nl_scale;
+      mat[i][1] *= n / nl_scale;
+      mat[i][2] *= n / nl_scale;
     }
+    return mat;
   }
 
   float3 viewingConditionsToSurround(int condition)
@@ -500,7 +496,7 @@ local:
     return newSurround;
   }
 
-  void init_matrices()
+  void init_matrices(float3x3& CAT_CAT16)
   {
     const float2 custom_primaries[3] =
     {
@@ -524,8 +520,6 @@ local:
     whitepoint = get_whitepoint(whiteLimit, custom_white);
     RGB_to_XYZ_limit = RGBPrimsToXYZMatrix(temp_primaries, whitepoint, 1.0f, FORWARDS);
     XYZ_to_RGB_limit = RGB_to_XYZ_limit.invert();
-
-    generate_panlrcm(2.0f, 0.05f); // TODO: for now these are constants matching the original CAM weights.
   }
 
   void init_chroma_compression(const float peakLuminance, const float log_peak)
@@ -533,6 +527,7 @@ local:
     _compr   = chroma_compress + (chroma_compress * chroma_compress_fact) * log_peak;
     _sat     = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak); // TODO; magic number
     _sat_thr = chroma_expand_thr / peakLuminance;
+    chromaCompressScale = pow(0.03379f * peakLuminance, 0.30596f) - 0.45135f;
   }
 
   inline float compute_base_exponential_nonlinearity(float Y_background, float Y_white)
@@ -796,15 +791,15 @@ local:
     }
   }
 
-  void precompute_reach_table(float2 reachMTable[totalTableSize], const float limitJ, const float3x3& xyz_matrix,
+  void precompute_reach_table(float reachMTable[totalTableSize], const float limitJ, const float3x3& xyz_matrix,
                               const float3x3& rgb_matrix, const int conditions)
   {
     for (int i = 0; i < totalTableSize; ++i)
     {
       const float hue = hueTable[i];
-      float2 JM = find_reach_cusp_for_hue(hue, rgb_matrix, conditions, hueFindingTollerance);
-      reachMTable[i][REACHCUSPM] = JM.y; 
-      reachMTable[i][REACHM]     = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
+      //float2 JM = find_reach_cusp_for_hue(hue, rgb_matrix, conditions, hueFindingTollerance);
+      //reachMTable[i][REACHCUSPM] = JM.y; 
+      reachMTable[i] = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
     }
   }
 
@@ -1119,7 +1114,8 @@ local:
     return matrix.invert();
   }
 
-  void precompute_hellwig(float3 referenceWhite, float XYZ_w_scaler, int conditions, float _L_A, float Y_b, bool HK, bool discountIlluminant, int stage)
+  void precompute_hellwig(float3 referenceWhite, float XYZ_w_scaler, int conditions, float _L_A, float Y_b, bool HK,
+                          bool discountIlluminant, int stage, float3x3 CAT_CAT16, float3x3 panlrcm)
   {
     surround[stage] = viewingConditionsToSurround(conditions);
     //HK_mode[stage]  = HK;
@@ -1173,16 +1169,16 @@ local:
      // Needs to use original as we have not setup alternates at this point
      // Assumes White falls on the original curve
     const float3 RGB_aw = post_adaptation_non_linear_response_compression_forward(F_L[stage] * RGB_wc);
-    A_w[stage]          = dot(achromatic_w, RGB_aw);
+    const float A_w     = dot(achromatic_w, RGB_aw);
 
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
     y_to_j_A_w[stage] = _post_adaptation_non_linear_response_compression_forward(_F_L);
 
-    achromatic_weights[stage] = achromatic_w / A_w[stage];
+    achromatic_weights[stage] = achromatic_w / A_w;
     a_weights[stage]          = surround[stage].z * a_w;
     b_weights[stage]          = surround[stage].z * b_w;
 
-    const float3 column_weights = float3(A_w[stage], 1.0f / surround[stage].z, 1.0f / surround[stage].z);
+    const float3 column_weights = float3(A_w, 1.0f / surround[stage].z, 1.0f / surround[stage].z);
     achromatic_weights_inv[stage]   = extract_row(panlrcm, 0) * column_weights;
     a_weights_inv[stage]            = extract_row(panlrcm, 1) * column_weights;
     b_weights_inv[stage]            = extract_row(panlrcm, 2) * column_weights;
@@ -1192,13 +1188,16 @@ local:
   {
     const float log_peak = init_tonescale_constants(_peakLuminance);
 
-    init_matrices();
+    float3x3 CAT_CAT16;
+
+    init_matrices(CAT_CAT16);
 
     const float3 white(1.0f, 1.0f, 1.0f);
     const float3 inputWhite = vector_dot(AP1_to_XYZ, white);
     const float3 limitWhite = vector_dot(RGB_to_XYZ_limit, white);
-    precompute_hellwig(inputWhite, _XYZ_w_scaler, _inputViewingConditions, L_A_in, Y_b_in, false, true, SOURCE_CONDITIONS);
-    precompute_hellwig(limitWhite, _XYZ_w_scaler, _outputViewingConditions, L_A_out, Y_b_out, false, true, DISPLAY_CONDITIONS);
+    const float3x3 panlrcm = generate_panlrcm(2.0f, 0.05f); // TODO: for now these are constants matching the original CAM weights.
+    precompute_hellwig(inputWhite, _XYZ_w_scaler, _inputViewingConditions, L_A_in, Y_b_in, false, true, SOURCE_CONDITIONS, CAT_CAT16, panlrcm);
+    precompute_hellwig(limitWhite, _XYZ_w_scaler, _outputViewingConditions, L_A_out, Y_b_out, false, true, DISPLAY_CONDITIONS, CAT_CAT16, panlrcm);
 
     init_chroma_compression(_peakLuminance, log_peak);
     const float2 smooth_cusp_scale = init_gamut_mapper(_peakLuminance, log_peak, limitWhite);
@@ -1574,7 +1573,7 @@ local:
     return lerp(limitingGamutCuspTable[pos - 1], limitingGamutCuspTable[pos], t);
   }
 
-  inline float2 reachMFromTable(int pos, float t)
+  inline float reachMFromTable(int pos, float t)
   {
     return lerp(reachMTable[pos - 1], reachMTable[pos], t);
   }
@@ -1755,7 +1754,7 @@ local:
     return lerp(cuspJ, _limitJmax, _focusGainBlend);
   }
 
-  float3 gamutMapper(float3 JMh, const float4 cusp, const float2 reachM, bool direction)
+  float3 gamutMapper(float3 JMh, const float4 cusp, const float reachM, bool direction)
   {
     // Limit to +ve values // TODO test this is neededS
     if (JMh.x <= 0.0f)
@@ -1777,7 +1776,7 @@ local:
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
 
     const float2 JMcusp                = float2(cusp.x, cusp.y);
-    const float  reachMaxM             = reachM[REACHM];
+    const float  reachMaxM             = reachM;
     const float2 estimated_hull_gammas = float2{cusp[UPPER_GAMMA], cusp[LOWER_GAMMA]};
     const float  analytical_threshold  = compute_analytical_threshold(JMcusp.x); 
     const float  focusJ                = compute_focusJ(JMcusp.x, _midJ, _cuspMidBlend, _limitJmax);
@@ -1932,7 +1931,32 @@ float3 inverseTonescale(float3 JMh, int conditions)
   // appropriate rate of change from display black to display white, and from
   // achromatic outward to purer colors.
   //
-  inline float chromaCompression(float3 JMh, const float origJ, const float reachCuspM, const float reachMMax, const bool inverse,
+  float chromaCompressionNorm(float h)
+  {
+#ifdef USE_DEGREES
+    const float hr = to_radians(h);
+#else
+    const float hr = h;
+#endif
+    float a = cos(hr);
+    float b = sin(hr);
+    float cos_hr2 = a * a - b * b;
+    float sin_hr2 = 2.0f * a * b;
+    float cos_hr3 = 4.0f * a * a * a - 3.0f * a;
+    float sin_hr3 = 3.0f * b - 4.0f * b * b * b;
+
+    float M = 11.34072f * a +
+              16.46899f * cos_hr2 +
+               7.88380f * cos_hr3 +
+              14.66441f * b +
+              -6.37224f * sin_hr2 +
+               9.19364f * sin_hr3 +
+              77.12896f;
+
+    return M * chromaCompressScale;
+  }
+
+  inline float chromaCompression(float3 JMh, const float origJ, const float reachMMax, const bool inverse,
                                  const float limitJmax, const float model_gamma,
                                  const float sat, const float sat_thr, const float compr)
   {
@@ -1944,7 +1968,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     const float nJ                   = JMh.x / limitJmax;
     const float snJ                  = max(0.0f, 1.0f - nJ);
 
-    const float normalisation_factor = reachCuspM; // pow(nJ, model_gamma) * reachMMax; //
+    const float normalisation_factor = chromaCompressionNorm(JMh.z); // reachCuspM; // pow(nJ, model_gamma) * reachMMax; //
     const float limit                = pow(nJ, model_gamma) * reachMMax / normalisation_factor; // 1.0f; //
 
     const float toe_limit           = limit - 0.001f;  // TODO; magic constantl
@@ -1989,9 +2013,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
     return M;
   }
 
-  float3 compressChroma(float3 JMh, const float originalJ, const float2 reachM, const bool inverse)
+  float3 compressChroma(float3 JMh, const float originalJ, const float reachM, const bool inverse)
   {
-    JMh.y = chromaCompression(JMh, originalJ, reachM[REACHCUSPM], reachM[REACHM], inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
+    JMh.y = chromaCompression(JMh, originalJ, reachM, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
     if (inverse)
       JMh.x = originalJ;
     return JMh;
@@ -2011,7 +2035,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int    pos    = lookupLimitingCuspHue(gamutMappedJMh.z);
         const float  t      = limiting_lerp_fraction(gamutMappedJMh.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         compressedJMh       = gamutMapper(gamutMappedJMh, cusp, reachM, INVERSE);
         tonemappedJMh       = inverseTonescale(compressedJMh, SOURCE_CONDITIONS);
         JMh                 = compressChroma(compressedJMh, tonemappedJMh.x, reachM, INVERSE);
@@ -2024,7 +2048,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int    pos    = lookupLimitingCuspHue(JMh.z);
         const float  t      = limiting_lerp_fraction(JMh.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         tonemappedJMh       = forwardTonescale(JMh, SOURCE_CONDITIONS);
         compressedJMh       = compressChroma(tonemappedJMh, JMh.x, reachM, FORWARDS);
         gamutMappedJMh      = gamutMapper(compressedJMh, cusp, reachM, FORWARDS);
@@ -2060,7 +2084,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     {
         const int    pos    = lookupLimitingCuspHue(src.z);
         const float  t      = limiting_lerp_fraction(src.z, pos);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         float3 JMh          = inverseTonescale(src, SOURCE_CONDITIONS);
         output              = compressChroma(src, JMh.x, reachM, FORWARDS);
     }
@@ -2069,7 +2093,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int    pos    = lookupLimitingCuspHue(src.z);
         const float  t      = limiting_lerp_fraction(src.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         output = gamutMapper(src, cusp, reachM, FORWARDS);
     }
     else if (FORWARDS_JMh_to_XYZ == diagnosticMode)
@@ -2085,7 +2109,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const int    pos    = lookupLimitingCuspHue(src.z);
         const float  t      = limiting_lerp_fraction(src.z, pos);
         const float4 cusp   = limitingCuspFromTable(pos, t);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         output = gamutMapper(src, cusp, reachM, INVERSE);
     }
     else if (INVERSE_inverseTonescale == diagnosticMode)
@@ -2096,7 +2120,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     {
         const int    pos  = lookupLimitingCuspHue(src.z);
         const float  t    = limiting_lerp_fraction(src.z, pos);
-        const float2 reachM = reachMFromTable(pos, t);
+        const float  reachM = reachMFromTable(pos, t);
         float3 JMh        = inverseTonescale(src, SOURCE_CONDITIONS);
         output            = compressChroma(src, JMh.x, reachM, INVERSE);
     }
@@ -2122,11 +2146,11 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (DEBUG_reachGamutCuspTable == diagnosticMode)
     {
-        const float  wrapped_hue = wrap_hue(src.z);
-        const int    pos         = lookupLimitingCuspHue(wrapped_hue);
-        const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
-        const float2 reachM      = reachMFromTable(pos, t);
-        output = float3(reachM[REACHCUSPM], reachM[REACHM], wrapped_hue);
+        const float wrapped_hue = wrap_hue(src.z);
+        const int   pos         = lookupLimitingCuspHue(wrapped_hue);
+        const float t           = limiting_lerp_fraction(wrapped_hue, pos);
+        const float reachM      = reachMFromTable(pos, t);
+        output = float3(chromaCompressionNorm(src.z), reachM, wrapped_hue);
     }
     else if (DEBUG_limitingGamutCuspTableRaw == diagnosticMode)
     {
@@ -2143,8 +2167,8 @@ float3 inverseTonescale(float3 JMh, int conditions)
     else if (DEBUG_reachMTableRaw == diagnosticMode)
     {
         int index = clamp(int(src.z), 0, totalTableSize);
-        float2 reachM = reachMTable[index];
-        output = float3(reachM.x, reachM.y, index);
+        float reachM = reachMTable[index];
+        output = float3(reachM, src.z, index);
     }
     
     else if (DEBUG_Jconstants == diagnosticMode)
@@ -2181,8 +2205,10 @@ float3 inverseTonescale(float3 JMh, int conditions)
     }
     else if (102 == diagnosticMode)
     {
-        float2 found = find_reach_cusp_for_hue(src.z, AP1_to_XYZ, SOURCE_CONDITIONS, hueFindingTollerance);
-        output = float3(found.x, found.y, src.z);
+        const float  wrapped_hue = wrap_hue(src.z);
+        const float2 found       = find_reach_cusp_for_hue(wrapped_hue, AP1_to_XYZ, SOURCE_CONDITIONS, hueFindingTollerance);
+        const float  norm        = chromaCompressionNorm(wrapped_hue);
+        output = float3(found.x, found.y, norm);
     }
     else if (103 == diagnosticMode)
     {
