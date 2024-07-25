@@ -117,16 +117,13 @@ local:
             r.y * (X + Z))) / d ;
 
     // # Assemble the matrix
-    float Mdata[] =
+    float3x3 newMatrix =
     {
       Sr * r.x, Sg * g.x, Sb * b.x,
       Sr * r.y, Sg * g.y, Sb * b.y,
       Sr * (1.0f - r.x - r.y), Sg * (1.0f - g.x - g.y), Sb * (1.0f - b.x - b.y),
     };
     // clang-format on
-
-    float3x3 newMatrix;
-    newMatrix.setArray(Mdata);
 
     // return forward or inverse matrix
     if (direction == FORWARDS)
