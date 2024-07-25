@@ -115,17 +115,11 @@ local:
     };
     // clang-format on
 
-    // return forward or inverse matrix
-    if (direction == FORWARDS)
+    if (direction == INVERSE)
     {
-      return newMatrix;
+      return newMatrix.invert();
     }
-    else if (direction == INVERSE)
-    {
-      // create inverse matrix
-      float3x3 newMatrixInverse = newMatrix.invert();
-      return newMatrixInverse;
-    }
+    return newMatrix;
   }
 
   float2 get_whitepoint(int which_white, float2 custom)
