@@ -1650,9 +1650,13 @@ local:
 
   int lookupLimitingCuspHue(float wrapped_hue)
   {
-    int low_i  = 0;
-    int high_i = baseIndex + gamutCuspTableSize; // Allowed as we have extra entries in the table
+    // samples are almost uniform should be able to find the correct entry +/- 6 entries from middle
+    // on average it is actually in a narrow range than this, left as an exersize for the reader to
+    // improve this, typically lies in upper half
+    // either way log2(cuspCornerCount*2) is way smaller than log2(gamutCuspTableSize)
     int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
+    int low_i  = max(0, i - cuspCornerCount);
+    int high_i = min(baseIndex + gamutCuspTableSize, i + cuspCornerCount); // Allowed as we have extra entries in the table
 
     while (low_i + 1 < high_i)
     {
@@ -2343,7 +2347,9 @@ float3 inverseTonescale(float3 JMh, int conditions)
         const float  wrapped_hue = wrap_hue(src.z);
         const int    pos         = lookupLimitingCuspHue(wrapped_hue);
         const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
-        output = float3(float(pos), pos + t, wrapped_hue);
+        const int    i           = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
+
+        output = float3(float(pos), pos + t, float(i));
     }
     else if (109 == diagnosticMode)
     {
