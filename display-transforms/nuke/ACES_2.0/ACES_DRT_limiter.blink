@@ -203,7 +203,8 @@ local:
     get_primaries(limitingPrimaries, custom_primaries, temp_primaries);
     const float2 limiting_whitepoint = get_whitepoint(limitingWhite, custom_white);
     limiting_RGB_to_XYZ = RGBPrimsToXYZMatrix(temp_primaries, limiting_whitepoint, 1.0f, FORWARDS);
-    XYZ_to_limiting_RGB = limiting_RGB_to_XYZ.invert();
+    XYZ_to_limiting_RGB = limiting_RGB_to_XYZ;
+    XYZ_to_limiting_RGB = XYZ_to_limiting_RGB.invert(); // Extra assignment can be dropped once invert is inplace
 
     get_primaries(encodingPrimaries, custom_primaries, temp_primaries);
     const float2   encoding_whitepoint = get_whitepoint(encodingWhite, custom_white);

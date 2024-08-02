@@ -224,7 +224,8 @@ local:
     get_primaries(encodingPrimaries, custom_primaries, temp_primaries);
     const float2 encoding_whitepoint = get_whitepoint(encodingWhite, custom_white);
     RGB_to_XYZ = RGBPrimsToXYZMatrix(temp_primaries, encoding_whitepoint, 1.0f, FORWARDS);
-    XYZ_to_RGB = RGB_to_XYZ.invert();
+    XYZ_to_RGB = RGB_to_XYZ;
+    XYZ_to_RGB = XYZ_to_RGB.invert(); // Extra assignment can be dropped once invert is inplace
  }
 
   float sRGB_to_linear(const float v)

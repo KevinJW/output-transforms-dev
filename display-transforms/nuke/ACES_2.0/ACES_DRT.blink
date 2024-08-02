@@ -496,18 +496,21 @@ local:
     };
   
     float3x3 CAT_CAT16_INVERSE = RGBPrimsToXYZMatrix(temp_primaries, LMS_wxy, 1.0f, FORWARDS);
-    CAT_CAT16 = CAT_CAT16_INVERSE.invert();
+    CAT_CAT16 = CAT_CAT16_INVERSE;  // Future Nuke versions make the inverse an inplace operator
+    CAT_CAT16 = CAT_CAT16.invert(); // So we copy it then invert, this extra assignment could be dropped in the future
 
     // AP1 matrix
     get_primaries(2, custom_primaries, temp_primaries);
     float2 whitepoint = get_whitepoint(1, custom_white);
     AP1_to_XYZ = RGBPrimsToXYZMatrix(temp_primaries, whitepoint, 1.0f, FORWARDS);
-    XYZ_to_AP1 = AP1_to_XYZ.invert();
+    XYZ_to_AP1 = AP1_to_XYZ;
+    XYZ_to_AP1 = XYZ_to_AP1.invert();
 
     get_primaries(primariesLimit, custom_primaries, temp_primaries);
     whitepoint = get_whitepoint(whiteLimit, custom_white);
     RGB_to_XYZ_limit = RGBPrimsToXYZMatrix(temp_primaries, whitepoint, 1.0f, FORWARDS);
-    XYZ_to_RGB_limit = RGB_to_XYZ_limit.invert();
+    XYZ_to_RGB_limit = RGB_to_XYZ_limit;
+    XYZ_to_RGB_limit = XYZ_to_RGB_limit.invert();
   }
 
   void init_chroma_compression(const float peakLuminance, const float log_peak)
