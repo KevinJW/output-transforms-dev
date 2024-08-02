@@ -544,16 +544,21 @@ local:
     return smooth_cusp_scale;
   }
 
-  void build_cusp_corners_tables(float3 RGB_corners[totalCornerCount], float3 JMh_corners[totalCornerCount], const int rgb_conditions, const float3x3& rgb_matrix, const float peakLuminance)
+  inline float3 generate_unit_cube_corners(const int corner)
+  {
+    // Generation order R, Y, G, C, B, M to ensure hues rotate in correct order
+    return float3(int(((corner+1)%cuspCornerCount) < 3), int(((corner+5)%cuspCornerCount) < 3), int(((corner+3)%cuspCornerCount) < 3));
+  }
+
+  void build_cusp_corners_tables(float3 XYZ_corners[totalCornerCount], float3 JMh_corners[totalCornerCount], const int rgb_conditions, const float3x3& rgb_matrix, const float peakLuminance)
   {
     float3 temp_cusp_corners[cuspCornerCount];
     float3 temp_JMh_corners[cuspCornerCount];
     int min_index = 0;
     for (int i = 0; i != cuspCornerCount; ++i)
     {
-      // Generation order R, Y, G, C, B, M to ensure hues rotate in correct order
-      temp_cusp_corners[i] = peakLuminance * float3(int(((i+1)%cuspCornerCount) < 3), int(((i+5)%cuspCornerCount) < 3), int(((i+3)%cuspCornerCount) < 3));
-      temp_JMh_corners[i] = linear_RGB_to_JMh(temp_cusp_corners[i], rgb_matrix, rgb_conditions);
+      temp_cusp_corners[i] = vector_dot(rgb_matrix, peakLuminance * generate_unit_cube_corners(i));
+      temp_JMh_corners[i] = XYZ_to_JMh(temp_cusp_corners[i], rgb_conditions);
       if (temp_JMh_corners[i].z < temp_JMh_corners[min_index].z)
         min_index = i;
     }
@@ -561,13 +566,13 @@ local:
     // Rotate entries placing lowest at [1] (not [0])
     for (int i = 0; i != cuspCornerCount; ++i)
     {
-      RGB_corners[i + 1] = temp_cusp_corners[(i + min_index) % cuspCornerCount];
+      XYZ_corners[i + 1] = temp_cusp_corners[(i + min_index) % cuspCornerCount];
       JMh_corners[i + 1] = temp_JMh_corners[(i + min_index) % cuspCornerCount];
     }
 
     // Copy end elements to create a cycle
-    RGB_corners[0]                   = RGB_corners[cuspCornerCount];
-    RGB_corners[cuspCornerCount+1]   = RGB_corners[1];
+    XYZ_corners[0]                   = XYZ_corners[cuspCornerCount];
+    XYZ_corners[cuspCornerCount+1]   = XYZ_corners[1];
     JMh_corners[0]                   = JMh_corners[cuspCornerCount];
     JMh_corners[cuspCornerCount+1]   = JMh_corners[1];
 
@@ -576,7 +581,7 @@ local:
     JMh_corners[cuspCornerCount+1].z = JMh_corners[cuspCornerCount+1].z + hue_limit;
   }
 
-  void find_reach_corners_tables(float3 RGB_corners[totalCornerCount], float3 JMh_corners[totalCornerCount],
+  void find_reach_corners_tables(float3 XYZ_corners[totalCornerCount], float3 JMh_corners[totalCornerCount],
                                 const int rgb_conditions, const float3x3& rgb_matrix, const float limitJ, const float maximum_source)
   {
     float3 temp_cusp_corners[cuspCornerCount];
@@ -585,8 +590,7 @@ local:
     int min_index = 0;
     for (int i = 0; i != cuspCornerCount; ++i)
     {
-      // Generation order R, Y, G, C, B, M to ensure hues rotate in correct order
-      const float3 vector = float3(int(((i+1)%cuspCornerCount) < 3), int(((i+5)%cuspCornerCount) < 3), int(((i+3)%cuspCornerCount) < 3));
+      const float3 xyz_vector = vector_dot(rgb_matrix, generate_unit_cube_corners(i));
       float3 JMh = float3(0.0f);
 
       float lower = 0.0f;
@@ -594,8 +598,8 @@ local:
       while ((upper - lower) > 1e-3)
       {
         float test = midpoint(lower, upper);
-        const float3 test_corner = test * vector;
-        JMh = linear_RGB_to_JMh(test_corner, rgb_matrix, rgb_conditions);
+        const float3 test_corner = test * xyz_vector;
+        JMh = XYZ_to_JMh(test_corner, rgb_conditions);
         if (JMh.x < limitJ)
         {
           lower = test;
@@ -607,8 +611,8 @@ local:
         if (JMh.x == limitJ)
           break;
       }
-      temp_cusp_corners[i] = upper * vector;
-      temp_JMh_corners[i] = linear_RGB_to_JMh(temp_cusp_corners[i], rgb_matrix, rgb_conditions);
+      temp_cusp_corners[i] = upper * xyz_vector;
+      temp_JMh_corners[i] = XYZ_to_JMh(temp_cusp_corners[i], rgb_conditions);
  
       if (temp_JMh_corners[i].z < temp_JMh_corners[min_index].z)
         min_index = i;
@@ -617,13 +621,13 @@ local:
     // Rotate entries placing lowest at [1] (not [0])
     for (int i = 0; i != cuspCornerCount; ++i)
     {
-      RGB_corners[i + 1] = temp_cusp_corners[(i + min_index) % cuspCornerCount];
+      XYZ_corners[i + 1] = temp_cusp_corners[(i + min_index) % cuspCornerCount];
       JMh_corners[i + 1] = temp_JMh_corners[(i + min_index) % cuspCornerCount];
     }
 
     // Copy end elements to create a cycle
-    RGB_corners[0]                   = RGB_corners[cuspCornerCount];
-    RGB_corners[cuspCornerCount+1]   = RGB_corners[1];
+    XYZ_corners[0]                   = XYZ_corners[cuspCornerCount];
+    XYZ_corners[cuspCornerCount+1]   = XYZ_corners[1];
     JMh_corners[0]                   = JMh_corners[cuspCornerCount];
     JMh_corners[cuspCornerCount+1]   = JMh_corners[1];
 
@@ -701,7 +705,7 @@ local:
     hueTable[totalTableSize - 1] = hueTable[1] + hue_limit;
   }
 
-  float2 find_reach_cusp_for_hue(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float tollerance)
+  float2 find_reach_cusp_for_hue(float hue, const int rgb_conditions, const float tollerance)
   {
     // This works by finding the required line segment between two of the RGB cusp corners, then binary searching
     // along the line calculating the JMh of points along the line till we find the required value.
@@ -744,7 +748,7 @@ local:
       {
         sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+        JMh = XYZ_to_JMh(sample, rgb_conditions);
         if ((JMh.z < reach_JMh_corners[lower_corner].z) || (JMh.z > hue))
         {
           upper_t = sample_t;
@@ -763,7 +767,7 @@ local:
       {
         sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+        JMh = XYZ_to_JMh(sample, rgb_conditions);
         if ((JMh.z > reach_JMh_corners[upper_corner].z) || (JMh.z <= hue))
         {
           lower_t = sample_t;
@@ -778,12 +782,12 @@ local:
     // Use the midpoint of the final interval for the actual sampls
     sample_t = midpoint(lower_t, upper_t);
     sample = lerp(cusp_lower, cusp_upper, sample_t);
-    JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+    JMh = XYZ_to_JMh(sample, rgb_conditions);
 
     return float2(JMh.x, JMh.y);
   }
 
-  float2 find_display_cusp_for_hue(float hue, const float3x3& rgb_matrix, const int rgb_conditions, const float tollerance)
+  float2 find_display_cusp_for_hue(float hue, const int rgb_conditions, const float tollerance)
   {
     // This works by finding the required line segment between two of the RGB cusp corners, then binary searching
     // along the line calculating the JMh of points along the line till we find the required value.
@@ -826,7 +830,7 @@ local:
       {
         sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+        JMh = XYZ_to_JMh(sample, rgb_conditions);
         if ((JMh.z < display_JMh_corners[lower_corner].z) || (JMh.z > hue))
         {
           upper_t = sample_t;
@@ -845,7 +849,7 @@ local:
       {
         sample_t = midpoint(lower_t, upper_t);
         sample = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+        JMh = XYZ_to_JMh(sample, rgb_conditions);
         if ((JMh.z > display_JMh_corners[upper_corner].z) || (JMh.z <= hue))
         {
           lower_t = sample_t;
@@ -860,12 +864,12 @@ local:
     // Use the midpoint of the final interval for the actual sampls
     sample_t = midpoint(lower_t, upper_t);
     sample = lerp(cusp_lower, cusp_upper, sample_t);
-    JMh = linear_RGB_to_JMh(sample, rgb_matrix, rgb_conditions);
+    JMh = XYZ_to_JMh(sample, rgb_conditions);
 
     return float2(JMh.x, JMh.y);
   }
 
-  void initialise_cusp_table(float4 output_table[totalTableSize], const float3x3& matrix, const float luminance, const int conditions)
+  void initialise_cusp_table(float4 output_table[totalTableSize], const float luminance, const int conditions)
   {
     // the 'tempTableUnsorted' table is populated
     // in increments of H of the limiting gamut HSV space starting at H=0.0
@@ -875,7 +879,7 @@ local:
     for (int i = 1; i != gamutCuspTableSize + 1; ++i)
     {
       const float hue = hueTable[i];
-      const float2 JM = find_display_cusp_for_hue(hue, matrix, conditions, hueFindingTollerance);
+      const float2 JM = find_display_cusp_for_hue(hue, conditions, hueFindingTollerance);
       output_table[i] = float4(JM.x, JM.y, hue, 0.0f);
     }
 
@@ -1314,7 +1318,7 @@ local:
     unique_hues = extract_sorted_cube_hues(cube_hues, reach_JMh_corners, display_JMh_corners);
     build_hue_table(hueTable, cube_hues, unique_hues);
 
-    initialise_cusp_table(limitingGamutCuspTable, RGB_to_XYZ_limit, _peakLuminance, DISPLAY_CONDITIONS);
+    initialise_cusp_table(limitingGamutCuspTable, _peakLuminance, DISPLAY_CONDITIONS);
     smooth_cusp_table(limitingGamutCuspTable, smooth_cusp_scale);
     fill_initial_hull_gammas(limitingGamutCuspTable, upperHullGamma, lowerHullGamma);
     // Iterate gamma finding based on previous values
@@ -2310,7 +2314,7 @@ float3 inverseTonescale(float3 JMh, int conditions)
     else if (102 == diagnosticMode)
     {
         const float  wrapped_hue = wrap_hue(src.z);
-        const float2 found       = find_reach_cusp_for_hue(wrapped_hue, AP1_to_XYZ, SOURCE_CONDITIONS, hueFindingTollerance);
+        const float2 found       = find_reach_cusp_for_hue(wrapped_hue, SOURCE_CONDITIONS, hueFindingTollerance);
         const float  norm        = chromaCompressionNorm(wrapped_hue);
         output = float3(found.x, found.y, norm);
     }
