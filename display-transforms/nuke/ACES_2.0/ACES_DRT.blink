@@ -682,24 +682,44 @@ local:
 
   void build_hue_table(float hueTable[totalTableSize], const float cube_hues[2*cuspCornerCount], const int unique_hues)
   {
-    const float ideal_spacing = hue_limit / gamutCuspTableSize;
+    const float ideal_spacing = gamutCuspTableSize / hue_limit;
     int samples_count[2*cuspCornerCount+2];
-    int total_samples = 0;
+    int last_idx = -1;
+    int min_index = cube_hues[0] == 0.0f ? 0 : 1; // Ensure we can always sample at 0.0 hue
+    for (int hue_idx = 0; hue_idx != unique_hues; ++hue_idx)
+    {
+      // BUG: "gamutCuspTableSize - 1" will fail if we have multple hues mapping near the top of the table
+      int nominal_idx = clamp(int(round(cube_hues[hue_idx] * ideal_spacing)), min_index, gamutCuspTableSize - 1);
+      if (last_idx == nominal_idx)
+      {
+        // Last two hues should sample at same index, need to adjust them
+        // Adjust previous sample down if we can
+        if (hue_idx > 1 && samples_count[hue_idx - 2] != (samples_count[hue_idx - 1] - 1))
+        {
+          samples_count[hue_idx - 1] = samples_count[hue_idx - 1] - 1;
+        }
+        else
+        {
+          nominal_idx = nominal_idx + 1;
+        }
+      }
+      samples_count[hue_idx] = min(nominal_idx, gamutCuspTableSize - 1);
+      last_idx = min_index = nominal_idx;
+    }
 
-    // Special case for ends
+    int total_samples = 0;
+    // Special cases for ends
     int i = 0;
-    samples_count[i] = max(1.0f, round(cube_hues[i] / ideal_spacing)); // samples between 0.0f and first hue
     build_hue_sample_interval(samples_count[i], 0.0f, cube_hues[i], hueTable, total_samples+1);
     total_samples += samples_count[i];
     for (++i; i != unique_hues; ++i)
     {
-      samples_count[i] = max(1.0f, round((cube_hues[i] - cube_hues[i-1]) / ideal_spacing)); 
-      build_hue_sample_interval(samples_count[i], cube_hues[i-1], cube_hues[i], hueTable, total_samples+1);
-      total_samples += samples_count[i];
+      const int samples = samples_count[i]-samples_count[i-1];
+      build_hue_sample_interval(samples, cube_hues[i-1], cube_hues[i], hueTable, total_samples+1);
+      total_samples += samples;
     }
-    samples_count[i] = gamutCuspTableSize - total_samples; //max(1.0f, round((hue_limit - cube_hues[i - 1]) / ideal_spacing)); // samples remaining
-    build_hue_sample_interval(samples_count[i], cube_hues[i-1], hue_limit, hueTable, total_samples+1);
-    total_samples += samples_count[i];
+    // BUG: could break if we are unlucky with samples all being used up by this point
+    build_hue_sample_interval(gamutCuspTableSize - total_samples, cube_hues[i-1], hue_limit, hueTable, total_samples+1);
 
     hueTable[0] = hueTable[totalTableSize - 2] - hue_limit;
     hueTable[totalTableSize - 1] = hueTable[1] + hue_limit;
@@ -1653,10 +1673,13 @@ local:
     // samples are almost uniform should be able to find the correct entry +/- 6 entries from middle
     // on average it is actually in a narrow range than this, left as an exersize for the reader to
     // improve this, typically lies in upper half
-    // either way log2(cuspCornerCount*2) is way smaller than log2(gamutCuspTableSize)
+    // either way log2(search_range*2) is way smaller than log2(gamutCuspTableSize)
+    // BUG: needs checking if this range is too small should all the hues cluster together due to a
+    // pathelogical triangle formed by two primaries from one gamut closely bracketing one from the other
+#define search_range 2
     int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
-    int low_i  = max(0, i - cuspCornerCount);
-    int high_i = min(baseIndex + gamutCuspTableSize, i + cuspCornerCount); // Allowed as we have extra entries in the table
+    int low_i  = max(0, i - search_range);
+    int high_i = min(baseIndex + gamutCuspTableSize, i + search_range); // Allowed as we have extra entries in the table
 
     while (low_i + 1 < high_i)
     {
@@ -2356,6 +2379,14 @@ float3 inverseTonescale(float3 JMh, int conditions)
         int index = clamp(int(src.z), 0, totalTableSize);
         float hue = hueTable[index];
         output = float3(float(index), hue, hue);
+    }
+    else if (110 == diagnosticMode)
+    {
+        const float wrapped_hue  = wrap_hue(src.z);
+        const int   pos          = lookupLimitingCuspHue(wrapped_hue);
+        const float t            = limiting_lerp_fraction(wrapped_hue, pos);
+        const float computed_hue = lerp(hueTable[pos - 1], hueTable[pos], t);
+        output = float3(computed_hue, wrapped_hue, src.z);
     }
     else
     {
