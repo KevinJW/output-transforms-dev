@@ -169,9 +169,6 @@ local:
   float3x3 XYZ_to_RGB_limit;
   float3x3 RGB_to_XYZ_limit;
 
-  // Reference Luminance in Cd/sqm
-#define referenceLuminance 100.0f
-
   // Model Nonlinearity 'constants'
 #define nl_gamma     0.42f
 #define nl_normalise 100.0f
@@ -1300,6 +1297,8 @@ local:
     // Viewing conditions dependent parameters, different to A_w // TODO looks like RGB_aw?
     y_to_j_A_w[stage] = _post_adaptation_non_linear_response_compression_forward(_F_L);
 
+    F_L[stage] *= _XYZ_w_scaler; // Allows tonescale multiplier to be removed
+
     achromatic_weights[stage] = achromatic_w / A_w;
     a_weights[stage]          = surround[stage].z * a_w;
     b_weights[stage]          = surround[stage].z * b_w;
@@ -1966,7 +1965,7 @@ local:
     const float aces_ts_g_ip   = 0.5f * (aces_ts_c_t + sqrt(aces_ts_c_t * (aces_ts_c_t + 4.0f * aces_ts_t_1)));
     const float aces_ts_g_ipp2 = -aces_ts_m_1 * pow(aces_ts_g_ip / aces_ts_m, 1.0f / aces_ts_g) / (pow(aces_ts_g_ip / aces_ts_m, 1.0f / aces_ts_g) - 1.0f);
     const float aces_ts_w_2    = aces_ts_c / aces_ts_g_ipp2;
-    aces_ts_s_2                = (aces_ts_w_2 * aces_ts_m_1) * referenceLuminance; // Factor in our reference
+    aces_ts_s_2                = (aces_ts_w_2 * aces_ts_m_1);
     const float aces_ts_u_2    = pow((aces_ts_r_hit / aces_ts_m_1) / ((aces_ts_r_hit / aces_ts_m_1) + aces_ts_w_2), aces_ts_g);
     aces_ts_m_2                = aces_ts_m_1 / aces_ts_u_2;
     aces_ts_inv_upper_limit    = (aces_ts_n * aces_ts_n) / (aces_ts_u_2 * aces_ts_n_r); // TODO Need better name Is it even needed?
@@ -1978,16 +1977,14 @@ local:
   {
     // Assumes Y is >= +0.0
     const float f = aces_ts_m_2 * pow(Y / (Y + aces_ts_s_2), aces_ts_g);
-    const float h = max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
-    return h * _XYZ_w_scaler; // TODO: another normalised number
+    return max(0.0f, f * f / (f + aces_ts_t_1)); // max serves 2 purposes, prevents -ve values being output also handles division by zero possibility
   }
 
   inline float aces_ts_rev(const float Y)
   {
     //Y       = clamp(Y, 0.0f, aces_ts_inv_upper_limit); // TODO; clamp needed?
-    const float h = Y / _XYZ_w_scaler;
-    const float f = (h + sqrt(h * (4.0f * aces_ts_t_1 + h))) / 2.0f;
-    return  aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
+    const float f = (Y + sqrt(Y * (4.0f * aces_ts_t_1 + Y))) / 2.0f;
+    return aces_ts_s_2 / (pow((aces_ts_m_2 / f), (1.0f / aces_ts_g)) - 1.0f);
   }
 
   // Short cut functions used to convert knwon mono-chromatic Y<->J rather than the full model
