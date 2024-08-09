@@ -185,8 +185,7 @@ local:
 
 #define UPPER_GAMMA 2
 #define LOWER_GAMMA 3
-  // Non-uniform in h
-  float  hueTable[totalTableSize];
+  float  hueTable[totalTableSize];               // Non-uniform in h
   float4 limitingGamutCuspTable[totalTableSize]; // { J, M, Upper gamma, Lower gamma }
   float  reachMTable[totalTableSize];            // reachM
 
@@ -201,7 +200,7 @@ local:
   int    unique_hues;
 #endif
 
-  float clamped_smoothness;
+  float _clamped_smoothness;
   float _focusDist;
   float _midJ;
   float _limitJmax;
@@ -209,16 +208,16 @@ local:
   float _base_slope;
 
   // Chroma compression pre-calculated constants
-  float _compr;              // Compression TODO rename
-  float _sat;                // Saturation TODO rename
-  float _sat_thr;            // Threshold to start expanding saturation
-  float chromaCompressScale; // Scaling factor for 'cusp' normalisation factor
+  float _compr;               // Compression TODO rename
+  float _sat;                 // Saturation TODO rename
+  float _sat_thr;             // Threshold to start expanding saturation
+  float _chromaCompressScale; // Scaling factor for 'cusp' normalisation factor
 
   float aces_ts_c_t;
   float aces_ts_s_2;
   float aces_ts_m_2;
   //float aces_ts_inv_upper_limit;
-  float input_upper_clamp;
+  float _input_upper_clamp;
 
   void define()
   {
@@ -479,7 +478,7 @@ local:
     _compr              = chroma_compress + (chroma_compress * chroma_compress_fact) * log_peak;
     _sat                = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak); // TODO; magic number
     _sat_thr            = chroma_expand_thr / peakLuminance;
-    chromaCompressScale = pow(0.03379f * peakLuminance, 0.30596f) - 0.45135f;
+    _chromaCompressScale = pow(0.03379f * peakLuminance, 0.30596f) - 0.45135f;
   }
 
   inline float compute_base_exponential_nonlinearity(float Y_background, float Y_white)
@@ -500,8 +499,8 @@ local:
     _model_gamma = 1.0f / (viewingConditionsToSurround(_outputViewingConditions).y * compute_base_exponential_nonlinearity(Y_b_out, L_A_out));
     _base_slope  = _limitJmax * _focusDist;
 
-    clamped_smoothness             = max(0.000001f, _smoothCusps); // TODO: max() needed because smin() would have a divide by zero?
-    const float2 smooth_cusp_scale = 1.0f + _smoothOffset * clamped_smoothness;
+    _clamped_smoothness            = max(0.000001f, _smoothCusps); // TODO: max() needed because smin() would have a divide by zero?
+    const float2 smooth_cusp_scale = 1.0f + _smoothOffset * _clamped_smoothness;
     return smooth_cusp_scale;
   }
 
@@ -882,7 +881,7 @@ local:
     const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float approxLimit =
-      findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, clamped_smoothness, estimated_hull_gammas, slope);
+      findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, _clamped_smoothness, estimated_hull_gammas, slope);
     const float J_boundary = slope * approxLimit + intersectJ;
 
     const float3 approximate_JMh = float3(J_boundary, approxLimit, testJmh.z);
@@ -1181,8 +1180,8 @@ local:
     F_L[stage] *= XYZ_w_scaler; // Allows tonescale multiplier to be removed
 
     achromatic_weights[stage] = panlrcm_fwd[0] / A_w;
-    a_weights[stage]          = surround[stage].z * panlrcm_fwd[1];
-    b_weights[stage]          = surround[stage].z * panlrcm_fwd[2];
+    a_weights[stage]          = panlrcm_fwd[1] * surround[stage].z;
+    b_weights[stage]          = panlrcm_fwd[2] * surround[stage].z;
 
     const float3 column_weights   = float3(A_w, 1.0f / surround[stage].z, 1.0f / surround[stage].z);
     achromatic_weights_inv[stage] = panlrcm_inv[0] * column_weights;
@@ -1190,19 +1189,8 @@ local:
     b_weights_inv[stage]          = panlrcm_inv[2] * column_weights;
   }
 
-  void init()
+  void init_Hellwig_model(float3x3 CAT_CAT16, const float3 inputWhite, const float3 limitWhite)
   {
-    const float log_peak = init_tonescale_constants(_peakLuminance);
-
-    float3x3 CAT_CAT16;
-
-    init_matrices(CAT_CAT16);
-
-    const float3   white(1.0f, 1.0f, 1.0f);
-    const float3   inputWhite = vector_dot(AP1_to_XYZ, white);
-    const float3   limitWhite = vector_dot(RGB_to_XYZ_limit, white);
-
- 
     float3 panlrcm_fwd[3];
     float3 panlrcm_inv[3];
     generate_panlrcm(panlrcm_fwd, panlrcm_inv);
@@ -1210,10 +1198,10 @@ local:
                        panlrcm_fwd, panlrcm_inv);
     precompute_hellwig(limitWhite, _XYZ_w_scaler, _outputViewingConditions, L_A_out, Y_b_out, false, true, DISPLAY_CONDITIONS, CAT_CAT16,
                        panlrcm_fwd, panlrcm_inv);
+  }
 
-    init_chroma_compression(_peakLuminance, log_peak);
-    const float2 smooth_cusp_scale = init_gamut_mapper(_peakLuminance, log_peak, limitWhite);
-
+  void init_cusp_tables(const float2 smooth_cusp_scale)
+  {
 #ifndef COMPILE_DIAGNOSTICS
     float3 reach_JMh_corners[totalCornerCount];
     float3 display_cusp_corners[totalCornerCount];
@@ -1222,7 +1210,7 @@ local:
     int    unique_hues;
 #endif
     // Fist find the unique hues for the cusp corners, then fill in the table uniformly between those hues
-    find_reach_corners_tables(reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _limitJmax, input_upper_clamp);
+    find_reach_corners_tables(reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _limitJmax, _input_upper_clamp);
     build_cusp_corners_tables(display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, RGB_to_XYZ_limit, _peakLuminance);
     unique_hues = extract_sorted_cube_hues(cube_hues, reach_JMh_corners, display_JMh_corners);
     build_hue_table(hueTable, cube_hues, unique_hues);
@@ -1241,6 +1229,25 @@ local:
     repair_broken_gamma_values(limitingGamutCuspTable);
 
     precompute_reach_table(reachMTable, _limitJmax, XYZ_to_AP1, AP1_to_XYZ, SOURCE_CONDITIONS);
+  }
+
+  void init()
+  {
+    const float log_peak = init_tonescale_constants(_peakLuminance);
+
+    float3x3 CAT_CAT16;
+    init_matrices(CAT_CAT16);
+
+    const float3   white(1.0f, 1.0f, 1.0f);
+    const float3   inputWhite = vector_dot(AP1_to_XYZ, white);
+    const float3   limitWhite = vector_dot(RGB_to_XYZ_limit, white);
+
+    init_Hellwig_model(CAT_CAT16, inputWhite, limitWhite);
+
+    init_chroma_compression(_peakLuminance, log_peak);
+    const float2 smooth_cusp_scale = init_gamut_mapper(_peakLuminance, log_peak, limitWhite);
+
+    init_cusp_tables(smooth_cusp_scale);
   }
 
 #ifdef USE_DEGREES
@@ -1284,7 +1291,7 @@ local:
     if (AP1Clamp)
     {
       float3 RGB = vector_dot(XYZ_to_AP1, XYZ);
-      RGB        = clamp(RGB, float3{0.0f}, float3(input_upper_clamp));
+      RGB        = clamp(RGB, float3{0.0f}, float3(_input_upper_clamp));
       XYZ        = vector_dot(AP1_to_XYZ, RGB);
     }
     return XYZ;
@@ -1818,11 +1825,11 @@ local:
       if (Jx > analytical_threshold)
       {
         Jx =
-          gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, clamped_smoothness, reachM, _model_gamma).x;
+          gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, _clamped_smoothness, reachM, _model_gamma).x;
         slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _focusAdjustGain, analytical_threshold);
       }
     }
-    JM = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, clamped_smoothness, reachM, _model_gamma);
+    JM = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, _clamped_smoothness, reachM, _model_gamma);
 
     return {JM.x, JM.y, JMh.z};
   }
@@ -1850,7 +1857,7 @@ local:
     const float aces_ts_n     = peakLuminance;
     const float aces_ts_m_0   = aces_ts_n / aces_ts_n_r;
     const float aces_ts_r_hit = aces_ts_r_hit_min + (aces_ts_r_hit_max - aces_ts_r_hit_min) * (log(aces_ts_m_0) / log(10000.0f / 100.0f));
-    input_upper_clamp =
+    _input_upper_clamp =
       aces_ts_r_hit * 8.0f * _XYZ_w_scaler; // (3 stops) above that needed to max out // TODO magic 8 ball factor needs assessing
 
     const float aces_ts_m_1  = 0.5f * (aces_ts_m_0 + sqrt(aces_ts_m_0 * (aces_ts_m_0 + 4.0f * aces_ts_t_1)));
@@ -1980,7 +1987,7 @@ local:
               77.12896f;
     // clang-format on
 
-    return M * chromaCompressScale;
+    return M * _chromaCompressScale;
   }
 
   inline float chromaCompression(float3 JMh, const float origJ, const float reachMMax, const bool inverse, const float limitJmax,
@@ -2223,8 +2230,8 @@ local:
     }
     else if (100 == diagnosticMode)
     {
-      const float sm  = src.z * smin(src.x / src.z, src.y / src.z, clamped_smoothness);
-      const float sms = smin_s(src.x, src.y, clamped_smoothness, src.z);
+      const float sm  = src.z * smin(src.x / src.z, src.y / src.z, _clamped_smoothness);
+      const float sms = smin_s(src.x, src.y, _clamped_smoothness, src.z);
       output          = float3(sm, sms, src.z);
     }
     else if (102 == diagnosticMode)
@@ -2247,7 +2254,7 @@ local:
     }
     else if (106 == diagnosticMode)
     {
-      output = float3(input_upper_clamp / _XYZ_w_scaler);
+      output = float3(_input_upper_clamp / _XYZ_w_scaler);
     }
     else if (107 == diagnosticMode)
     {
