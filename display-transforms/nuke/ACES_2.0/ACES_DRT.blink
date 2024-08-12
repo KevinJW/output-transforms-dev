@@ -208,11 +208,13 @@ local:
   float _base_slope;
 
   // Chroma compression pre-calculated constants
-  float _compr;               // Compression TODO rename
-  float _sat;                 // Saturation TODO rename
-  float _sat_thr;             // Threshold to start expanding saturation
-  float _chromaCompressScale; // Scaling factor for 'cusp' normalisation factor
-
+  float  _compr;               // Compression TODO rename
+  float  _sat;                 // Saturation TODO rename
+  float  _sat_thr;             // Threshold to start expanding saturation
+  float3 _chromaCompress_cosFactors;
+  float3 _chromaCompress_sinFactors;
+  float  _chromaCompress_offset;
+    
   float aces_ts_c_t;
   float aces_ts_s_2;
   float aces_ts_m_2;
@@ -478,7 +480,12 @@ local:
     _compr              = chroma_compress + (chroma_compress * chroma_compress_fact) * log_peak;
     _sat                = max(0.2f, chroma_expand - (chroma_expand * chroma_expand_fact) * log_peak); // TODO; magic number
     _sat_thr            = chroma_expand_thr / peakLuminance;
-    _chromaCompressScale = pow(0.03379f * peakLuminance, 0.30596f) - 0.45135f;
+
+    // Compression normalisation factors, magic numbers come from fitting Against AP1
+    const float chromaCompressScale = pow(0.03379f * peakLuminance, 0.30596f) - 0.45135f;
+    _chromaCompress_cosFactors      = float3(11.34072f, 16.46899f, 7.88380f) * chromaCompressScale;
+    _chromaCompress_sinFactors      = float3(14.66441f, -6.37224f, 9.19364f) * chromaCompressScale;
+    _chromaCompress_offset          = 77.12896f * chromaCompressScale;
   }
 
   inline float compute_base_exponential_nonlinearity(float Y_background, float Y_white)
@@ -1966,28 +1973,26 @@ local:
   float chromaCompressionNorm(float h)
   {
 #ifdef USE_DEGREES
-    const float hr = to_radians(h);
+    const float  hr = to_radians(h);
 #else
-    const float hr = h;
+    const float  hr = h;
 #endif
-    float a       = cos(hr);
-    float b       = sin(hr);
-    float cos_hr2 = a * a - b * b;
-    float sin_hr2 = 2.0f * a * b;
-    float cos_hr3 = 4.0f * a * a * a - 3.0f * a;
-    float sin_hr3 = 3.0f * b - 4.0f * b * b * b;
+    const float  cos_hr  = cos(hr);
+    const float  sin_hr  = sin(hr);
+    const float3 cosines =
+    {
+      cos_hr,
+      cos_hr * cos_hr - sin_hr * sin_hr,
+      4.0f * cos_hr * cos_hr * cos_hr - 3.0f * cos_hr
+    };
+    const float3 sines =
+    {
+      sin_hr,
+      2.0f * cos_hr * sin_hr,
+      3.0f * sin_hr - 4.0f * sin_hr * sin_hr * sin_hr
+    }; 
 
-    // clang-format off
-    float M = 11.34072f * a +
-              16.46899f * cos_hr2 +
-               7.88380f * cos_hr3 +
-              14.66441f * b +
-              -6.37224f * sin_hr2 +
-               9.19364f * sin_hr3 +
-              77.12896f;
-    // clang-format on
-
-    return M * _chromaCompressScale;
+    return dot(cosines, _chromaCompress_cosFactors) + dot(sines, _chromaCompress_sinFactors) + _chromaCompress_offset;;
   }
 
   inline float chromaCompression(float3 JMh, const float origJ, const float reachMMax, const bool inverse, const float limitJmax,
