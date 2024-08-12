@@ -19,7 +19,7 @@ param:
 #define PRIMARIES_AP1     2
 #define PRIMARIES_Rec709  3
 #define PRIMARIES_Rec2020 4
-#define PRIMARIES_P3D65   5
+#define PRIMARIES_P3      5
 #define PRIMARIES_CUSTOM  6
   int primariesLimit;
 
@@ -386,7 +386,7 @@ local:
       primaries_out[1] = float2(0.1700f, 0.7970f);
       primaries_out[2] = float2(0.1310f, 0.0460f);
     }
-    else if (PRIMARIES_P3D65 == primaries)
+    else if (PRIMARIES_P3 == primaries)
     {
       primaries_out[0] = float2(0.6800f, 0.3200f);
       primaries_out[1] = float2(0.2650f, 0.6900f);
@@ -1291,7 +1291,7 @@ local:
     if (AP1Clamp)
     {
       float3 RGB = vector_dot(XYZ_to_AP1, XYZ);
-      RGB        = clamp(RGB, float3{0.0f}, float3(_input_upper_clamp));
+      RGB        = clamp(RGB, float3(0.0f), float3(_input_upper_clamp));
       XYZ        = vector_dot(AP1_to_XYZ, RGB);
     }
     return XYZ;
@@ -1305,7 +1305,7 @@ local:
 
   inline float3 _post_adaptation_non_linear_response_compression_forward(float3 RGB)
   {
-    const float3 F_L_RGB = pow(RGB, float3(nl_gamma, nl_gamma, nl_gamma));
+    const float3 F_L_RGB = pow(RGB, float3(nl_gamma));
     return F_L_RGB / (nl_offset + F_L_RGB);
   }
 
@@ -1318,7 +1318,7 @@ local:
   inline float3 _post_adaptation_non_linear_response_compression_inverse(float3 RGB)
   {
     const float3 F_L_RGB = (nl_offset * RGB) / (1.0f - RGB);
-    const float3 RGB_p   = pow(F_L_RGB, float3(1.0f / nl_gamma, 1.0f / nl_gamma, 1.0f / nl_gamma));
+    const float3 RGB_p   = pow(F_L_RGB, float3(1.0f / nl_gamma));
     return RGB_p;
   }
 
