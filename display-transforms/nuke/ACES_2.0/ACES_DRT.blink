@@ -737,40 +737,26 @@ local:
     // There is an edge case where we need to search towards the range when across the [0.0f, hue_limit) boundary
     // each edge needs the directions swapped. This is handled by comparing against the appropriate corner to make
     // sure we are still in the expected range between the lower and upper corner hue limits
-    if (upper_corner > cuspCornerCount) // TODO: extract function and try eliminate duplication
+    while ((upper_t - lower_t) > tolerance)
     {
-      while ((upper_t - lower_t) > tolerance)
+      sample_t = midpoint(lower_t, upper_t);
+      sample   = lerp(cusp_lower, cusp_upper, sample_t);
+      JMh      = XYZ_to_JMh(sample, rgb_conditions);
+      if (JMh.z < display_JMh_corners[lower_corner].z)
       {
-        sample_t = midpoint(lower_t, upper_t);
-        sample   = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh      = XYZ_to_JMh(sample, rgb_conditions);
-        if ((JMh.z < display_JMh_corners[lower_corner].z) || (JMh.z > hue))
-        {
-          upper_t = sample_t;
-        }
-        else
-        {
-          lower_t = sample_t;
-        }
+        upper_t = sample_t;
       }
-    }
-    else
-    {
-      // Note the following corner comparison is only needed for the lowest line segment but to avoid more duplication
-      // we can use it for all the remaining segments as it still produces the correct result
-      while ((upper_t - lower_t) > tolerance)
+      else if (JMh.z > display_JMh_corners[upper_corner].z)
       {
-        sample_t = midpoint(lower_t, upper_t);
-        sample   = lerp(cusp_lower, cusp_upper, sample_t);
-        JMh      = XYZ_to_JMh(sample, rgb_conditions);
-        if ((JMh.z > display_JMh_corners[upper_corner].z) || (JMh.z <= hue))
-        {
-          lower_t = sample_t;
-        }
-        else
-        {
-          upper_t = sample_t;
-        }
+        lower_t = sample_t;
+      }
+      else if (JMh.z > hue)
+      {
+        upper_t = sample_t;
+      }
+      else
+      {
+        lower_t = sample_t;
       }
     }
 
