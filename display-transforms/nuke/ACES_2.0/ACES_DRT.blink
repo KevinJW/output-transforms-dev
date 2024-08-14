@@ -1982,7 +1982,7 @@ local:
     const float3 cosines =
     {
       cos_hr,
-      cos_hr * cos_hr - sin_hr * sin_hr,
+      2.0f * cos_hr * cos_hr - 1.0f,
       4.0f * cos_hr * cos_hr * cos_hr - 3.0f * cos_hr
     };
     const float3 sines =
