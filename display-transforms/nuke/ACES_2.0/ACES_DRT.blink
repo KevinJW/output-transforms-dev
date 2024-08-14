@@ -729,7 +729,7 @@ local:
     float3       sample;
 
     float sample_t;
-    float lower_t = 0.0f; // TODO: can we estimate a better range to search as the distribution is roughly uniform
+    float lower_t = 0.0f;
     float upper_t = 1.0f;
 
     float3 JMh;
@@ -746,7 +746,7 @@ local:
       {
         upper_t = sample_t;
       }
-      else if (JMh.z > display_JMh_corners[upper_corner].z)
+      else if (JMh.z >= display_JMh_corners[upper_corner].z)
       {
         lower_t = sample_t;
       }
