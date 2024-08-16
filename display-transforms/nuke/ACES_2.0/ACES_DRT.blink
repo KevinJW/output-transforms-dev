@@ -700,7 +700,8 @@ local:
   }
 
   float2 find_display_cusp_for_hue(float hue, const float3 display_cusp_corners[totalCornerCount],
-                                   const float3 display_JMh_corners[totalCornerCount], const int rgb_conditions, const float tolerance)
+                                   const float3 display_JMh_corners[totalCornerCount], const int rgb_conditions, const float tolerance,
+                                   float2 & previous)
   {
     // This works by finding the required line segment between two of the XYZ cusp corners, then binary searching
     // along the line calculating the JMh of points along the line till we find the required value.
@@ -729,7 +730,7 @@ local:
     float3       sample;
 
     float sample_t;
-    float lower_t = 0.0f;
+    float lower_t = (upper_corner == previous.x) ? previous.y : 0.0f; // If we are still on the same segment start from where we left off
     float upper_t = 1.0f;
 
     float3 JMh;
@@ -765,6 +766,9 @@ local:
     sample   = lerp(cusp_lower, cusp_upper, sample_t);
     JMh      = XYZ_to_JMh(sample, rgb_conditions);
 
+    previous.x = upper_corner;
+    previous.y = sample_t;
+
     return float2(JMh.x, JMh.y);
   }
 
@@ -780,10 +784,11 @@ local:
     // since it is unlikely that HSV.H=0 and JMh.h=0 line up
     // the entries are then wrap-around shifted
     // so that the 'gamutCuspTable' starts with the lowest JMh.h value
+    float2 previous = {0.0f, 0.0f};
     for (int i = 1; i != gamutCuspTableSize + 1; ++i)
     {
       const float  hue = hueTable[i];
-      const float2 JM  = find_display_cusp_for_hue(hue, display_cusp_corners, display_JMh_corners, conditions, hueFindingTolerance) * smooth_cusp_scale;
+      const float2 JM  = find_display_cusp_for_hue(hue, display_cusp_corners, display_JMh_corners, conditions, hueFindingTolerance, previous) * smooth_cusp_scale;
       output_table[i]  = float4(JM.x, JM.y, upperHullGamma, lowerHullGamma);
     }
 
@@ -795,18 +800,19 @@ local:
   void precompute_reach_table(float reachMTable[totalTableSize], const float limitJ, const float3x3& xyz_matrix, const float3x3& rgb_matrix,
                               const int conditions)
   {
+    float guestimate = 100.0f; // TODO: probably could scale this based on peak luminance
     for (int i = 0; i != totalTableSize; ++i)
     {
       const float hue = hueTable[i];
-      reachMTable[i]  = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions);
+      reachMTable[i]  = find_reach_boundaryM(hue, limitJ, xyz_matrix, 1e-4, conditions, guestimate);
+      guestimate = reachMTable[i];
     }
   }
 
-  float find_reach_boundaryM(const float hue, const float givenJ, const float3x3& matrix, const float threshold, const int conditions)
+  float find_reach_boundaryM(const float hue, const float givenJ, const float3x3& matrix, const float threshold, const int conditions, float & high)
   {
-    const float search_range = 100.0;
-    float       low          = 0.0;
-    float       high         = low + search_range;
+    const float search_range = 50.0;
+    float       low          = min(0.0f, high - search_range);  // TODO: is this enough of a range for worst case?
     bool        outside      = false;
 
     while (!outside && high < 1400.0)
@@ -2182,8 +2188,9 @@ local:
     else if (DEBUG_reachMConditions == diagnosticMode)
     {
       const float wrapped_hue = wrap_hue(src.z);
-      const float sM          = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS);
-      const float dM          = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS);
+      float       guestimate  = 100.0f;
+      const float sM          = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, SOURCE_CONDITIONS, guestimate);
+      const float dM          = find_reach_boundaryM(wrapped_hue, _limitJmax, XYZ_to_AP1, 1e-4, DISPLAY_CONDITIONS, guestimate);
 
       output = float3(sM, dM, wrapped_hue);
     }
@@ -2205,8 +2212,9 @@ local:
     }
     else if (102 == diagnosticMode)
     {
+      float2 previous = { 0.0f, 0.0f};
       const float  wrapped_hue = wrap_hue(src.z);
-      const float2 found       = find_display_cusp_for_hue(wrapped_hue, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, hueFindingTolerance);
+      const float2 found       = find_display_cusp_for_hue(wrapped_hue, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, hueFindingTolerance, previous);
       const float  norm        = chromaCompressionNorm(wrapped_hue);
       output                   = float3(found.x, found.y, norm);
     }
