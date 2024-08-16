@@ -769,8 +769,12 @@ local:
   }
 
   void initialise_cusp_table(float4 output_table[totalTableSize], const float luminance, const float3 display_cusp_corners[totalCornerCount],
-                             const float3 display_JMh_corners[totalCornerCount], const int conditions)
+                             const float3 display_JMh_corners[totalCornerCount], const int conditions,
+                             const float2 smooth_cusp_scale, float upperHullGamma, float lowerHullGamma)
   {
+    upperHullGamma = 1.0f / upperHullGamma;
+    lowerHullGamma = 1.0f / lowerHullGamma;
+
     // the 'tempTableUnsorted' table is populated
     // in increments of H of the limiting gamut HSV space starting at H=0.0
     // since it is unlikely that HSV.H=0 and JMh.h=0 line up
@@ -779,27 +783,13 @@ local:
     for (int i = 1; i != gamutCuspTableSize + 1; ++i)
     {
       const float  hue = hueTable[i];
-      const float2 JM  = find_display_cusp_for_hue(hue, display_cusp_corners, display_JMh_corners, conditions, hueFindingTolerance);
-      output_table[i]  = float4(JM.x, JM.y, hue, 0.0f);
+      const float2 JM  = find_display_cusp_for_hue(hue, display_cusp_corners, display_JMh_corners, conditions, hueFindingTolerance) * smooth_cusp_scale;
+      output_table[i]  = float4(JM.x, JM.y, upperHullGamma, lowerHullGamma);
     }
 
     // Copy extra entries to ease the code to handle hues wrapping around
     output_table[0]                              = output_table[baseIndex + gamutCuspTableSize - 1];
     output_table[baseIndex + gamutCuspTableSize] = output_table[baseIndex];
-
-    // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, hue_limit)
-    output_table[0].z                              = output_table[0].z - hue_limit;
-    output_table[baseIndex + gamutCuspTableSize].z = output_table[baseIndex + gamutCuspTableSize].z + hue_limit;
-  }
-
-  void smooth_cusp_table(float4 table[totalTableSize], const float2 scale)
-  {
-    for (int i = 0; i != totalTableSize; ++i)
-    {
-      const float hue = hueTable[i];
-      //table[i].x      = table[i].x * scale.x; // Not needed as the scale is unity
-      table[i].y = table[i].y * scale.y;
-    }
   }
 
   void precompute_reach_table(float reachMTable[totalTableSize], const float limitJ, const float3x3& xyz_matrix, const float3x3& rgb_matrix,
@@ -843,17 +833,6 @@ local:
       }
     }
     return high;
-  }
-
-  void fill_initial_hull_gammas(float4 table[totalTableSize], float upperHullGamma, float lowerHullGamma)
-  {
-    upperHullGamma = 1.0f / upperHullGamma;
-    lowerHullGamma = 1.0f / lowerHullGamma;
-    for (int i = 0; i != totalTableSize; ++i)
-    {
-      table[i][UPPER_GAMMA] = upperHullGamma;
-      table[i][LOWER_GAMMA] = lowerHullGamma;
-    }
   }
 
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
@@ -1208,9 +1187,8 @@ local:
     unique_hues = extract_sorted_cube_hues(cube_hues, reach_JMh_corners, display_JMh_corners);
     build_hue_table(hueTable, cube_hues, unique_hues);
 
-    initialise_cusp_table(limitingGamutCuspTable, _peakLuminance, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS);
-    smooth_cusp_table(limitingGamutCuspTable, smooth_cusp_scale);
-    fill_initial_hull_gammas(limitingGamutCuspTable, upperHullGamma, lowerHullGamma);
+    initialise_cusp_table(limitingGamutCuspTable, _peakLuminance, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS,
+                           smooth_cusp_scale, upperHullGamma, lowerHullGamma);
     // Iterate gamma finding based on previous values
     for (int i = 0; i != 3; ++i)
     {
