@@ -285,7 +285,7 @@ local:
     defineParam(aces_ts_r_hit_max, "aces_ts_r_hit_max", 896.0f); // Scene-referred value "hitting the roof" at 10,000 nits
   }
 
-  float3x3 RGBPrimsToXYZMatrix(float2 primaries[3], float2 wxy, float Y, bool direction)
+  float3x3 RGBPrimsToXYZMatrix(float2 primaries[3], float2 wxy, float Y, const bool direction)
   {
     // # given r g b chromaticities and whitepoint, convert RGB colors to XYZ
     // # based on CtlColorSpace.cpp from the CTL source code : 77
@@ -571,25 +571,18 @@ local:
       RGB_c.y = dot(DM_weights[rgb_conditions], xyz_vector);
       RGB_c.z = dot(DS_weights[rgb_conditions], xyz_vector);
 
-      float lower = 0.0f;
-      float upper = maximum_source;
-      while ((upper - lower) > 1e-3) // TODO: tolerance pass as parameter
+      float2 bounds = { maximum_source, 0.0f }; // Order mx, min for binary search assignment
+      while ((bounds[0] - bounds[1]) > 1e-3) // TODO: tolerance pass as parameter
       {
-        float        test        = midpoint(lower, upper);
+        const float  test        = midpoint(bounds);
         const float3 test_corner = test * RGB_c;
         const float  J           = RGB_c_to_J(test_corner, rgb_conditions);
-        if (J < limitJ)
-        {
-          lower = test;
-        }
-        else
-        {
-          upper = test;
-        }
+
+        bounds[(J < limitJ)]     = test; // Binary search
         if (J == limitJ)
           break;
       }
-      temp_JMh_corners[i] = XYZ_to_JMh(upper * xyz_vector, rgb_conditions);
+      temp_JMh_corners[i] = XYZ_to_JMh(bounds[0] * xyz_vector, rgb_conditions);
 
       if (temp_JMh_corners[i].z < temp_JMh_corners[min_index].z)
         min_index = i;
@@ -730,39 +723,37 @@ local:
     float3       sample;
 
     float sample_t;
-    float lower_t = (upper_corner == previous.x) ? previous.y : 0.0f; // If we are still on the same segment start from where we left off
-    float upper_t = 1.0f;
+    float2 bounds = {
+      1.0f,
+      (upper_corner == previous.x) ? previous.y : 0.0f // If we are still on the same segment start from where we left off
+    };
 
     float3 JMh;
 
-    // There is an edge case where we need to search towards the range when across the [0.0f, hue_limit) boundary
-    // each edge needs the directions swapped. This is handled by comparing against the appropriate corner to make
-    // sure we are still in the expected range between the lower and upper corner hue limits
-    while ((upper_t - lower_t) > tolerance)
+    while ((bounds[0] - bounds[1]) > tolerance)
     {
-      sample_t = midpoint(lower_t, upper_t);
+      sample_t = midpoint(bounds);
       sample   = lerp(cusp_lower, cusp_upper, sample_t);
       JMh      = XYZ_to_JMh(sample, rgb_conditions);
-      if (JMh.z < display_JMh_corners[lower_corner].z)
-      {
-        upper_t = sample_t;
-      }
-      else if (JMh.z >= display_JMh_corners[upper_corner].z)
-      {
-        lower_t = sample_t;
-      }
-      else if (JMh.z > hue)
-      {
-        upper_t = sample_t;
-      }
-      else
-      {
-        lower_t = sample_t;
-      }
+     
+      // There is an edge case where we need to search towards the range when across the [0.0f, hue_limit) boundary
+      // each edge needs the directions swapped. This is handled by comparing against the appropriate corner to make
+      // sure we are still in the expected range between the lower and upper corner hue limits
+      //
+      // Complex conditional we are looking inside the interval
+      //
+      //    Lower      hue     Upper     =>   Condition        =>  Bound to change
+      //     [          |        )
+      //  z                              =>   sample <  lower  =>  upper
+      //        z                        =>   sample <= hue    =>  lower
+      //                   z             =>   sample >  hue    =>  uppper
+      //                             z   =>   sample >= upper  =>  lower
+      bounds[(JMh.z >= display_JMh_corners[upper_corner].z)
+          || (JMh.z <= hue && JMh.z >= display_JMh_corners[lower_corner].z)] = sample_t;
     }
 
     // Use the midpoint of the final interval for the actual samples
-    sample_t = midpoint(lower_t, upper_t);
+    sample_t = midpoint(bounds);
     sample   = lerp(cusp_lower, cusp_upper, sample_t);
     JMh      = XYZ_to_JMh(sample, rgb_conditions);
 
@@ -784,7 +775,7 @@ local:
     // since it is unlikely that HSV.H=0 and JMh.h=0 line up
     // the entries are then wrap-around shifted
     // so that the 'gamutCuspTable' starts with the lowest JMh.h value
-    float2 previous = {0.0f, 0.0f};
+    float2 previous = { 0.0f, 0.0f };
     for (int i = 1; i != gamutCuspTableSize + 1; ++i)
     {
       const float  hue = hueTable[i];
@@ -812,33 +803,26 @@ local:
   float find_reach_boundaryM(const float hue, const float givenJ, const float3x3& matrix, const float threshold, const int conditions, float & high)
   {
     const float search_range = 50.0;
-    float       low          = min(0.0f, high - search_range);  // TODO: is this enough of a range for worst case?
+    float2      bounds       = { high, min(0.0f, high - search_range) };  // TODO: is this enough of a range for worst case?
     bool        outside      = false;
 
-    while (!outside && high < 1400.0)
+    while (!outside && bounds[0] < 1400.0)
     {
-      outside = any_below_zero(JMh_to_linear_RGB(float3(givenJ, high, hue), matrix, conditions));
+      outside = any_below_zero(JMh_to_linear_RGB(float3(givenJ, bounds[0], hue), matrix, conditions));
       if (!outside)
       {
-        low  = high;
-        high = high + search_range;
+        bounds[1] =  bounds[0];
+        bounds[0] += search_range;
       }
     }
 
-    while ((high - low) > threshold)
+    while ((bounds[0] - bounds[1]) > threshold)
     {
-      const float sampleM = midpoint(low, high);
+      const float sampleM = midpoint(bounds);
       outside             = any_below_zero(JMh_to_linear_RGB(float3(givenJ, sampleM, hue), matrix, conditions));
-      if (outside)
-      {
-        high = sampleM;
-      }
-      else
-      {
-        low = sampleM;
-      }
+      bounds[!outside] = sampleM;
     }
-    return high;
+    return bounds[0];
   }
 
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
@@ -915,37 +899,30 @@ local:
         }
 
         const float search_range = gammaSearchStep;
-        float       low          = gammaMinimum;
-        float       high         = low + search_range;
+        float2      bounds       = { gammaMinimum + search_range, gammaMinimum };
         bool        all_inside   = true;
 
-        while (all_inside && high < gammaMaximum)
+        while (all_inside && bounds[0] < gammaMaximum)
         {
-          const float2 estimated_hull_gammas = float2(high, table[i][LOWER_GAMMA]);
+          const float2 estimated_hull_gammas = float2(bounds[0], table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
-            low  = high;
-            high = high + search_range;
+            bounds[1] =  bounds[0];
+            bounds[0] += search_range;
           }
         }
 
         float testGamma = -1.0;
-        while ((high - low) > gammaAccuracy)
+        while ((bounds[0] - bounds[1]) > gammaAccuracy)
         {
-          testGamma                          = midpoint(low, high);
+          testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(testGamma, table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
-          if (!all_inside)
-          {
-            high = testGamma;
-          }
-          else
-          {
-            low = testGamma;
-          }
+
+          bounds[all_inside] = testGamma;
         }
         table[i][UPPER_GAMMA] = testGamma;
       }
@@ -983,37 +960,29 @@ local:
         }
 
         const float search_range = gammaSearchStep;
-        float       low          = gammaMinimum;
-        float       high         = low + search_range;
+        float2      bounds       = { gammaMinimum + search_range, gammaMinimum };
         bool        all_inside   = true;
 
-        while (all_inside && high < gammaMaximum)
+        while (all_inside && bounds[0] < gammaMaximum)
         {
-          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], high);
+          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], bounds[0]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
-            low  = high;
-            high = high + search_range;
+            bounds[1] =  bounds[0];
+            bounds[0] += search_range;
           }
         }
 
         float testGamma = -1.0;
-        while ((high - low) > gammaAccuracy)
+        while ((bounds[0] - bounds[1]) > gammaAccuracy)
         {
-          testGamma                          = midpoint(low, high);
+          testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], testGamma);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
-          if (!all_inside)
-          {
-            high = testGamma;
-          }
-          else
-          {
-            low = testGamma;
-          }
+          bounds[all_inside] = testGamma;
         }
         table[i][LOWER_GAMMA] = testGamma;
       }
@@ -1427,8 +1396,6 @@ local:
     //float       M  = surround[conditions].z * et * sqrt(a * a + b * b);
     float M = sqrt(a * a + b * b); // Valid as et == 1.0
 
-    if (J == 0.0f)                 // TODO: is this needed?
-      M = 0.0f;
     return {J, M, h};
   }
 
@@ -1524,15 +1491,15 @@ local:
     return min(a, b) - h * h * h * s * (1.0f / 6.0f);
   }
 
-  inline int midpoint(int low, int high)
+  inline int midpoint(const int2 interval)
   {
-    return int((high + low) / 2); // Integer division
+    return int((interval[1] + interval[0]) / 2); // Integer division
   }
 
-  inline float midpoint(float low, float high)
+  inline float midpoint(const float2 interval)
   {
     // For our cases we ignore overflow, +/-inf, NaN etc https://hal.science/hal-00576641v2/document
-    return (high + low) * 0.5f;
+    return (interval[1] + interval[0]) * 0.5f;
   }
 
   // retrieve the JM coordinates of the limiting gamut cusp at the hue slice 'h'
@@ -1556,23 +1523,19 @@ local:
     // BUG: needs checking if this range is too small should all the hues cluster together due to a
     // pathological triangle formed by two primaries from one gamut closely bracketing one from the other
 #define search_range 2
-    int i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
-    int low_i  = max(0, i - search_range);
-    int high_i = min(baseIndex + gamutCuspTableSize, i + search_range); // Allowed as we have extra entries in the table
+    int  i      = hue_position_in_uniform_table(wrapped_hue, gamutCuspTableSize) + baseIndex;
+    int2 bounds = {
+      // Order is high value, low value for the address calculation below to be correct
+      min(baseIndex + gamutCuspTableSize, i + search_range), // Allowed as we have extra entries in the table
+      max(0, i - search_range)
+    };
 
-    while (low_i + 1 < high_i)
+    while (bounds[1] + 1 < bounds[0])
     {
-      if (wrapped_hue > hueTable[i])
-      {
-        low_i = i;
-      }
-      else
-      {
-        high_i = i;
-      }
-      i = midpoint(low_i, high_i);
+      bounds[wrapped_hue > hueTable[i]] = i; // Note this address calculation relies on 'true' mapping to 1 and 'false' to 0
+      i = midpoint(bounds);
     }
-    return high_i;
+    return bounds[0];
   }
 
   float limiting_lerp_fraction(float wrapped_hue, int pos)
@@ -1612,31 +1575,24 @@ local:
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
   float solve_J_intersect(float2 JM, float focusJ, float maxJ, float slope_gain)
   {
-    float a = JM.y / (focusJ * slope_gain);
+    const float a = JM.y / (focusJ * slope_gain);
     float b;
     float c;
+    float root;
 
     if (JM.x < focusJ)
     {
       b = 1.0f - JM.y / slope_gain;
       c = -JM.x;
+      root = -sqrt(b * b - 4.0f * a * c); // Note negative
     }
     else
     {
       b = -(1.0f + JM.y / slope_gain + maxJ * JM.y / (focusJ * slope_gain));
       c = maxJ * JM.y / slope_gain + JM.x;
+      root = sqrt(b * b - 4.0f * a * c);
     }
-
-    const float root = sqrt(b * b - 4.0f * a * c);
-
-    if (JM.x < focusJ)
-    {
-      return 2.0f * c / (-b - root);
-    }
-    else
-    {
-      return 2.0f * c / (-b + root);
-    }
+    return 2.0f * c / (-b + root);
   }
 
   inline float compute_compression_vector_slope(const float intersectJ, const float focusJ, float limitJmax, float slope_gain)
@@ -1734,7 +1690,7 @@ local:
     return (threshold + relative_location); // shift back to absolute
   }
 
-  float2 gamutMapJM(float2 JM, bool direction, float limitJmax, float slope_gain, float2 JMcusp, float focusJ, float2 estimated_hull_gammas,
+  float2 gamutMapJM(float2 JM, const bool direction, float limitJmax, float slope_gain, float2 JMcusp, float focusJ, float2 estimated_hull_gammas,
                     float smoothness, float reachMaxM, float model_gamma)
   {
     const float intersectJ       = solve_J_intersect(JM, focusJ, limitJmax, slope_gain);
@@ -1767,24 +1723,8 @@ local:
     return lerp(cuspJ, limitJmax, focusGainBlend);
   }
 
-  float3 gamutMapper(float3 JMh, const float4 cusp, const float reachM, bool direction)
+  float3 _gamutMapper(const float3 JMh, const float4 cusp, const float reachM, const bool direction)
   {
-    // Limit to +ve values // TODO test this is neededS
-    if (JMh.x <= 0.0f)
-    {
-      JMh.x = 0.0f;
-      JMh.y = 0.0f;
-    }
-    // Above the expected maximum we explicitly map to 0 M
-    if (JMh.x >= _limitJmax)
-    {
-      JMh.y = 0.0f;
-    }
-
-    // We compress M only so avoid mapping near zero
-    if (JMh.y == 0.0f)
-      return JMh;
-
     // Hue dependent, but as hue does not change we can compute them equally for both directions.
     const float2 JMcusp                = float2(cusp.x, cusp.y);
     const float2 estimated_hull_gammas = float2{cusp[UPPER_GAMMA], cusp[LOWER_GAMMA]};
@@ -1809,6 +1749,27 @@ local:
     JM = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, _clamped_smoothness, reachM, _model_gamma);
 
     return {JM.x, JM.y, JMh.z};
+  }
+
+  inline float3 gamutMapper(float3 JMh, const float4 cusp, const float reachM, const bool direction)
+  {
+    // Limit to +ve values // TODO test this is needed
+    if (JMh.x <= 0.0f)
+    {
+      JMh.x = 0.0f;
+      JMh.y = 0.0f;
+    }
+    // Above the expected maximum we explicitly map to 0 M
+    if (JMh.x >= _limitJmax)
+    {
+      JMh.y = 0.0f;
+    }
+
+    // We compress M only so avoid mapping zero
+    if (JMh.y == 0.0f)
+      return JMh;
+
+    return _gamutMapper(JMh, cusp, reachM, direction);
   }
 
   // convert linear RGB values with the given primaries to CAM J (lightness), M (colorfulness) and h (hue) correlates
@@ -1915,7 +1876,7 @@ local:
   // A "toe" function that remaps the given value x between 0 and limit.
   // The k1 and k2 parameters change the size and shape of the toe.
   // https://www.desmos.com/calculator/6vplvw14ti
-  float toe(float x, float limit, float k1, float k2, bool inverse)
+  inline float toe(const float x, const float limit, float k1, float k2, const bool inverse)
   {
     if (x > limit)
       return x;
@@ -1962,17 +1923,14 @@ local:
       3.0f * sin_hr - 4.0f * sin_hr * sin_hr * sin_hr
     }; 
 
-    return dot(cosines, _chromaCompress_cosFactors) + dot(sines, _chromaCompress_sinFactors) + _chromaCompress_offset;;
+    return dot(cosines, _chromaCompress_cosFactors) + dot(sines, _chromaCompress_sinFactors) + _chromaCompress_offset;
   }
 
-  inline float chromaCompression(float3 JMh, const float origJ, const float reachMMax, const bool inverse, const float limitJmax,
-                                 const float model_gamma, const float sat, const float sat_thr, const float compr)
+  inline float _chromaCompression(const float3 JMh, const float origJ, const float reachMMax, const bool inverse, const float limitJmax,
+                                  const float model_gamma, const float sat, const float sat_thr, const float compr)
   {
     // Assumes 'h' component is wrapped [0.0, hue_limit)
-    float M = JMh.y;
-    if (M == 0.0f)
-      return M;
-
+    float       M                    = JMh.y;
     const float nJ                   = JMh.x / limitJmax;
     const float snJ                  = max(0.0f, 1.0f - nJ);
     const float normalisation_factor = chromaCompressionNorm(JMh.z);
@@ -2019,11 +1977,15 @@ local:
     return M;
   }
 
-  float3 compressChroma(float3 JMh, const float originalJ, const float reachM, const bool inverse)
+  inline float3 compressChroma(float3 JMh, const float originalJ, const float reachM, const bool inverse)
   {
-    JMh.y = chromaCompression(JMh, originalJ, reachM, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
+    if (JMh.y == 0.0f)
+      return JMh.y;
+
+    JMh.y = _chromaCompression(JMh, originalJ, reachM, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
     if (inverse)
       JMh.x = originalJ;
+
     return JMh;
   }
 
@@ -2212,7 +2174,7 @@ local:
     }
     else if (102 == diagnosticMode)
     {
-      float2 previous = { 0.0f, 0.0f};
+      float2 previous = { 0.0f, 0.0f };
       const float  wrapped_hue = wrap_hue(src.z);
       const float2 found       = find_display_cusp_for_hue(wrapped_hue, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, hueFindingTolerance, previous);
       const float  norm        = chromaCompressionNorm(wrapped_hue);
