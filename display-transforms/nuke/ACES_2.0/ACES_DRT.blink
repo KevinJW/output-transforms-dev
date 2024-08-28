@@ -1531,11 +1531,14 @@ local:
       max(0, i - search_range)
     };
 
-    while (bounds[INTERVAL_LOW] + 1 < bounds[INTERVAL_HIGH])
-    {
+    //while (bounds[INTERVAL_LOW] + 1 < bounds[INTERVAL_HIGH])
+    //{
       bounds[wrapped_hue > hueTable[i]] = i; // Note this address calculation relies on 'true' mapping to 1 and 'false' to 0
       i = midpoint(bounds);
-    }
+      // Unroll while loop, as we know we can find the result in 2 passes due to the interval of 2 * search range
+      bounds[wrapped_hue > hueTable[i]] = i;
+      //i = midpoint(bounds); // Last iteration doesn't need the next mid point
+    //}
     return bounds[INTERVAL_HIGH];
   }
 
