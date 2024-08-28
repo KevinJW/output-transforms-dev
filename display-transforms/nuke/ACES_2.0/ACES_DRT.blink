@@ -285,6 +285,19 @@ local:
     defineParam(aces_ts_r_hit_max, "aces_ts_r_hit_max", 896.0f); // Scene-referred value "hitting the roof" at 10,000 nits
   }
 
+#define INTERVAL_HIGH  0
+#define INTERVAL_LOW   1
+  inline int midpoint(const int2 interval)
+  {
+    return int((interval[INTERVAL_LOW] + interval[INTERVAL_HIGH]) / 2); // Integer division
+  }
+
+  inline float midpoint(const float2 interval)
+  {
+    // For our cases we ignore overflow, +/-inf, NaN etc https://hal.science/hal-00576641v2/document
+    return (interval[INTERVAL_LOW] + interval[INTERVAL_HIGH]) * 0.5f;
+  }
+
   float3x3 RGBPrimsToXYZMatrix(float2 primaries[3], float2 wxy, float Y, const bool direction)
   {
     // # given r g b chromaticities and whitepoint, convert RGB colors to XYZ
@@ -572,7 +585,7 @@ local:
       RGB_c.z = dot(DS_weights[rgb_conditions], xyz_vector);
 
       float2 bounds = { maximum_source, 0.0f }; // Order mx, min for binary search assignment
-      while ((bounds[0] - bounds[1]) > 1e-3) // TODO: tolerance pass as parameter
+      while ((bounds[INTERVAL_HIGH] - bounds[INTERVAL_LOW]) > 1e-3) // TODO: tolerance pass as parameter
       {
         const float  test        = midpoint(bounds);
         const float3 test_corner = test * RGB_c;
@@ -582,7 +595,7 @@ local:
         if (J == limitJ)
           break;
       }
-      temp_JMh_corners[i] = XYZ_to_JMh(bounds[0] * xyz_vector, rgb_conditions);
+      temp_JMh_corners[i] = XYZ_to_JMh(bounds[INTERVAL_HIGH] * xyz_vector, rgb_conditions);
 
       if (temp_JMh_corners[i].z < temp_JMh_corners[min_index].z)
         min_index = i;
@@ -730,7 +743,7 @@ local:
 
     float3 JMh;
 
-    while ((bounds[0] - bounds[1]) > tolerance)
+    while ((bounds[INTERVAL_HIGH] - bounds[INTERVAL_LOW]) > tolerance)
     {
       sample_t = midpoint(bounds);
       sample   = lerp(cusp_lower, cusp_upper, sample_t);
@@ -743,13 +756,13 @@ local:
       // Complex conditional we are looking inside the interval
       //
       //    Lower      hue     Upper     =>   Condition        =>  Bound to change
-      //     [          |        )
-      //  z                              =>   sample <  lower  =>  upper
+      //     (          |        )
+      //  z                              =>   sample <= lower  =>  upper
       //        z                        =>   sample <= hue    =>  lower
       //                   z             =>   sample >  hue    =>  uppper
       //                             z   =>   sample >= upper  =>  lower
       bounds[(JMh.z >= display_JMh_corners[upper_corner].z)
-          || (JMh.z <= hue && JMh.z >= display_JMh_corners[lower_corner].z)] = sample_t;
+          || (JMh.z <= hue && JMh.z > display_JMh_corners[lower_corner].z)] = sample_t;
     }
 
     // Use the midpoint of the final interval for the actual samples
@@ -806,23 +819,23 @@ local:
     float2      bounds       = { high, min(0.0f, high - search_range) };  // TODO: is this enough of a range for worst case?
     bool        outside      = false;
 
-    while (!outside && bounds[0] < 1400.0)
+    while (!outside && bounds[INTERVAL_HIGH] < 1400.0)
     {
-      outside = any_below_zero(JMh_to_linear_RGB(float3(givenJ, bounds[0], hue), matrix, conditions));
+      outside = any_below_zero(JMh_to_linear_RGB(float3(givenJ, bounds[INTERVAL_HIGH], hue), matrix, conditions));
       if (!outside)
       {
-        bounds[1] =  bounds[0];
-        bounds[0] += search_range;
+        bounds[INTERVAL_LOW]  =  bounds[INTERVAL_HIGH];
+        bounds[INTERVAL_HIGH] += search_range;
       }
     }
 
-    while ((bounds[0] - bounds[1]) > threshold)
+    while ((bounds[INTERVAL_HIGH] - bounds[INTERVAL_LOW]) > threshold)
     {
       const float sampleM = midpoint(bounds);
       outside             = any_below_zero(JMh_to_linear_RGB(float3(givenJ, sampleM, hue), matrix, conditions));
       bounds[!outside] = sampleM;
     }
-    return bounds[0];
+    return bounds[INTERVAL_HIGH];
   }
 
   inline bool outside_hull(const float3 newLimitRGB, const float maxRGBtestVal)
@@ -902,26 +915,25 @@ local:
         float2      bounds       = { gammaMinimum + search_range, gammaMinimum };
         bool        all_inside   = true;
 
-        while (all_inside && bounds[0] < gammaMaximum)
+        while (all_inside && bounds[INTERVAL_HIGH] < gammaMaximum)
         {
-          const float2 estimated_hull_gammas = float2(bounds[0], table[i][LOWER_GAMMA]);
+          const float2 estimated_hull_gammas = float2(bounds[INTERVAL_HIGH], table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
-            bounds[1] =  bounds[0];
-            bounds[0] += search_range;
+            bounds[INTERVAL_LOW]  =  bounds[INTERVAL_HIGH];
+            bounds[INTERVAL_HIGH] += search_range;
           }
         }
 
         float testGamma = -1.0;
-        while ((bounds[0] - bounds[1]) > gammaAccuracy)
+        while ((bounds[INTERVAL_HIGH] - bounds[INTERVAL_LOW]) > gammaAccuracy)
         {
           testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(testGamma, table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
-
           bounds[all_inside] = testGamma;
         }
         table[i][UPPER_GAMMA] = testGamma;
@@ -963,20 +975,20 @@ local:
         float2      bounds       = { gammaMinimum + search_range, gammaMinimum };
         bool        all_inside   = true;
 
-        while (all_inside && bounds[0] < gammaMaximum)
+        while (all_inside && bounds[INTERVAL_HIGH] < gammaMaximum)
         {
-          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], bounds[0]);
+          const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], bounds[INTERVAL_HIGH]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
                                                focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
-            bounds[1] =  bounds[0];
-            bounds[0] += search_range;
+            bounds[INTERVAL_LOW]  =  bounds[INTERVAL_HIGH];
+            bounds[INTERVAL_HIGH] += search_range;
           }
         }
 
         float testGamma = -1.0;
-        while ((bounds[0] - bounds[1]) > gammaAccuracy)
+        while ((bounds[INTERVAL_HIGH] - bounds[INTERVAL_LOW]) > gammaAccuracy)
         {
           testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], testGamma);
@@ -1491,17 +1503,6 @@ local:
     return min(a, b) - h * h * h * s * (1.0f / 6.0f);
   }
 
-  inline int midpoint(const int2 interval)
-  {
-    return int((interval[1] + interval[0]) / 2); // Integer division
-  }
-
-  inline float midpoint(const float2 interval)
-  {
-    // For our cases we ignore overflow, +/-inf, NaN etc https://hal.science/hal-00576641v2/document
-    return (interval[1] + interval[0]) * 0.5f;
-  }
-
   // retrieve the JM coordinates of the limiting gamut cusp at the hue slice 'h'
   // cusps are very expensive to compute
   // and the DRT is only using them for lightness mapping
@@ -1530,12 +1531,12 @@ local:
       max(0, i - search_range)
     };
 
-    while (bounds[1] + 1 < bounds[0])
+    while (bounds[INTERVAL_LOW] + 1 < bounds[INTERVAL_HIGH])
     {
       bounds[wrapped_hue > hueTable[i]] = i; // Note this address calculation relies on 'true' mapping to 1 and 'false' to 0
       i = midpoint(bounds);
     }
-    return bounds[0];
+    return bounds[INTERVAL_HIGH];
   }
 
   float limiting_lerp_fraction(float wrapped_hue, int pos)
