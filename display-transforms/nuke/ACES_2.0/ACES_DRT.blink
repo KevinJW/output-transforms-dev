@@ -189,14 +189,15 @@ local:
   float4 limitingGamutCuspTable[totalTableSize]; // { J, M, Upper gamma, Lower gamma }
   float  reachMTable[totalTableSize];            // reachM
 
+#define reachCornerCount  3
 #define cuspCornerCount  6
 #define totalCornerCount cuspCornerCount + additional_entries
 
 #ifdef COMPILE_DIAGNOSTICS
-  float3 reach_JMh_corners[totalCornerCount];
+  float3 reach_JMh_corners[reachCornerCount];
   float3 display_cusp_corners[totalCornerCount];
   float3 display_JMh_corners[totalCornerCount];
-  float  cube_hues[2 * cuspCornerCount];
+  float  cube_hues[reachCornerCount + cuspCornerCount];
   int    unique_hues;
 #endif
 
@@ -531,8 +532,14 @@ local:
                   int(((corner + 3) % cuspCornerCount) < 3));
   }
 
-  void build_cusp_corners_tables(float3 XYZ_corners[totalCornerCount], float3 JMh_corners[totalCornerCount], const int rgb_conditions,
-                                 const float3x3& rgb_matrix, const float peakLuminance)
+  inline float3 generate_unit_cube_primary_corners(const int corner)
+  {
+    // Generation order R, G, B to ensure hues rotate in correct order
+    return float3(int(corner % 3 == 0), int(corner % 3 == 1), int(corner % 3 == 2));
+  }
+
+  void build_display_cusp_corners(float3 XYZ_corners[totalCornerCount], float3 JMh_corners[totalCornerCount], const int rgb_conditions,
+                                  const float3x3& rgb_matrix, const float peakLuminance)
   {
     float3 temp_cusp_corners[cuspCornerCount];
     float3 temp_JMh_corners[cuspCornerCount];
@@ -570,15 +577,15 @@ local:
     return J_from_Achromatic(A, conditions);
   }
 
-  void find_reach_corners_tables(float3 JMh_corners[totalCornerCount], const int rgb_conditions, const float3x3& rgb_matrix, const float limitJ,
-                                 const float maximum_source)
+  void find_reach_corners(float3 JMh_corners[reachCornerCount], const int rgb_conditions, const float3x3& rgb_matrix, const float limitJ,
+                          const float maximum_source)
   {
-    float3 temp_JMh_corners[cuspCornerCount];
+    float3 temp_JMh_corners[reachCornerCount];
 
     int min_index = 0;
-    for (int i = 0; i != cuspCornerCount; ++i)
+    for (int i = 0; i != reachCornerCount; ++i)
     {
-      const float3 xyz_vector = vector_dot(rgb_matrix, generate_unit_cube_corners(i));
+      const float3 xyz_vector = vector_dot(rgb_matrix, generate_unit_cube_primary_corners(i));
       float3       RGB_c;
       RGB_c.x = dot(DL_weights[rgb_conditions], xyz_vector);
       RGB_c.y = dot(DM_weights[rgb_conditions], xyz_vector);
@@ -601,32 +608,25 @@ local:
         min_index = i;
     }
 
-    // Rotate entries placing lowest at [1] (not [0])
-    for (int i = 0; i != cuspCornerCount; ++i)
+    for (int i = 0; i != reachCornerCount; ++i)
     {
-      JMh_corners[i + 1] = temp_JMh_corners[(i + min_index) % cuspCornerCount];
+      JMh_corners[i] = temp_JMh_corners[(i + min_index) % reachCornerCount];
     }
-
-    // Copy end elements to create a cycle
-    JMh_corners[0]                   = JMh_corners[cuspCornerCount];
-    JMh_corners[cuspCornerCount + 1] = JMh_corners[1];
-
-    // Wrap the hues, to maintain monotonicity these entries will fall outside [0.0, hue_limit)
-    JMh_corners[0].z                   = JMh_corners[0].z - hue_limit;
-    JMh_corners[cuspCornerCount + 1].z = JMh_corners[cuspCornerCount + 1].z + hue_limit;
   }
 
-  int extract_sorted_cube_hues(float sorted_hues[12], const float3 reach_JMh[totalCornerCount], const float3 display_JMh[totalCornerCount])
+  int extract_sorted_cube_hues(float sorted_hues[reachCornerCount + cuspCornerCount], const float3 reach_JMh[reachCornerCount],
+                               const float3 display_JMh[totalCornerCount])
   {
     // Basic merge of 2 sorted arrays, extracting the unique hues.
     // Return the count of the unique hues
     int idx         = 0;
-    int reach_idx   = 1;
+    int reach_idx   = 0;
     int display_idx = 1;
-    while ((reach_idx < (cuspCornerCount + 1)) || (display_idx < (cuspCornerCount + 1)))
+    while ((reach_idx < reachCornerCount) || (display_idx < (cuspCornerCount + 1)))
     {
-      const float reach_hue   = reach_JMh[reach_idx].z;
-      const float display_hue = display_JMh[display_idx].z;
+       // If we run out of entries, then use a value greater than expected limit
+      const float reach_hue   = (reach_idx < reachCornerCount) ? reach_JMh[reach_idx].z : 2 * hue_limit;
+      const float display_hue = (display_idx < (cuspCornerCount + 1)) ? display_JMh[display_idx].z : 2 * hue_limit;
       if (reach_hue == display_hue)
       {
         sorted_hues[idx] = reach_hue;
@@ -660,10 +660,10 @@ local:
     }
   }
 
-  void build_hue_table(float hueTable[totalTableSize], const float cube_hues[2 * cuspCornerCount], const int unique_hues)
+  void build_hue_table(float hueTable[totalTableSize], const float cube_hues[reachCornerCount + cuspCornerCount], const int unique_hues)
   {
     const float ideal_spacing = gamutCuspTableSize / hue_limit;
-    int         samples_count[2 * cuspCornerCount + 2];
+    int         samples_count[reachCornerCount + cuspCornerCount + 2];
     int         last_idx  = -1;
     int         min_index = cube_hues[0] == 0.0f ? 0 : 1; // Ensure we can always sample at 0.0 hue
     for (int hue_idx = 0; hue_idx != unique_hues; ++hue_idx)
@@ -1162,15 +1162,15 @@ local:
   void init_cusp_tables(const float2 smooth_cusp_scale)
   {
 #ifndef COMPILE_DIAGNOSTICS
-    float3 reach_JMh_corners[totalCornerCount];
+    float3 reach_JMh_corners[reachCornerCount];
     float3 display_cusp_corners[totalCornerCount];
     float3 display_JMh_corners[totalCornerCount];
-    float  cube_hues[2 * cuspCornerCount];
+    float  cube_hues[reachCornerCount + cuspCornerCount];
     int    unique_hues;
 #endif
     // Fist find the unique hues for the cusp corners, then fill in the table uniformly between those hues
-    find_reach_corners_tables(reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _limitJmax, _input_upper_clamp);
-    build_cusp_corners_tables(display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, RGB_to_XYZ_limit, _peakLuminance);
+    find_reach_corners(reach_JMh_corners, SOURCE_CONDITIONS, AP1_to_XYZ, _limitJmax, _input_upper_clamp);
+    build_display_cusp_corners(display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS, RGB_to_XYZ_limit, _peakLuminance);
     unique_hues = extract_sorted_cube_hues(cube_hues, reach_JMh_corners, display_JMh_corners);
     build_hue_table(hueTable, cube_hues, unique_hues);
 
@@ -2186,7 +2186,7 @@ local:
     }
     else if (103 == diagnosticMode)
     {
-      const int index = int(src.z) % totalCornerCount;
+      const int index = int(src.z) % reachCornerCount;
       output          = reach_JMh_corners[index];
     }
 
@@ -2201,7 +2201,7 @@ local:
     }
     else if (107 == diagnosticMode)
     {
-      const int index = int(src.z) % (2 * cuspCornerCount);
+      const int index = int(src.z) % (reachCornerCount + cuspCornerCount);
       output          = float3(cube_hues[index], index, unique_hues);
     }
     else if (108 == diagnosticMode)
