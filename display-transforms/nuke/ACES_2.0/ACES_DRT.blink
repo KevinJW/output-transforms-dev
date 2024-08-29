@@ -1983,10 +1983,8 @@ local:
 
   inline float3 compressChroma(float3 JMh, const float originalJ, const float reachM, const bool inverse)
   {
-    if (JMh.y == 0.0f)
-      return JMh.y;
-
-    JMh.y = _chromaCompression(JMh, originalJ, reachM, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
+    if (JMh.y != 0.0f)
+      JMh.y = _chromaCompression(JMh, originalJ, reachM, inverse, _limitJmax, _model_gamma, _sat, _sat_thr, _compr);
     if (inverse)
       JMh.x = originalJ;
 
