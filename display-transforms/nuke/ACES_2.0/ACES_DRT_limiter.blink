@@ -210,11 +210,7 @@ local:
     white_scaling_factor          = (whitepoint_scale) ? 1.0f / max_channel : 1.0f; // TODO: add scaling into re-encoding matrix?
     white_scaled                  = (white_scaling_factor != 1.0f);
 
-    has_effect = white_scaled;
-    if (!invert)
-    {
-      has_effect |= limitClamp;
-    }
+    has_effect = white_scaled || limitClamp;
   }
 
   // multiplies a 3D vector with a 3x3 matrix
