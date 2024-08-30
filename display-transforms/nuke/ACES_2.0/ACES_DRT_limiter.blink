@@ -274,6 +274,7 @@ local:
       {
         out = xyz_to_limiting(out);
         out = remove_whitepoint_scale(out);
+        out = apply_limiting_clamp(out);
         out = limiting_to_xyz(out);
       }
       else
