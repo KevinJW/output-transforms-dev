@@ -204,6 +204,7 @@ local:
 
   float _clamped_smoothness;
   float _focusDist;
+  float _recip_focusAdjustGain;
   float _midJ;
   float _limitJmax;
   float _model_gamma; // TODO: investigate uses of this
@@ -514,8 +515,9 @@ local:
 
   float2 init_gamut_mapper(const float peakLuminance, const float log_peak, const float3 white)
   {
-    _focusDist = _focusDistance + _focusDistance * _focusDistanceScaling * log_peak;
-    _midJ      = XYZ_to_JMh(white * aces_ts_c_t * _XYZ_w_scaler, DISPLAY_CONDITIONS).x; // TODO: scale white scaler ?
+    _focusDist             = _focusDistance + _focusDistance * _focusDistanceScaling * log_peak;
+    _recip_focusAdjustGain = 1.0f / _focusAdjustGain;
+    _midJ                  = XYZ_to_JMh(white * aces_ts_c_t * _XYZ_w_scaler, DISPLAY_CONDITIONS).x; // TODO: scale white scaler ?
 
     // calculate the maximum expected J & M values for the given limit gamut
     // these are used as limiting values for the gamut boundary searches
@@ -850,12 +852,12 @@ local:
   }
 
   float3 compute_test_location(const float2 JMcusp, float3 testJmh, const float limitJmax, const float base_slope, const float midJ,
-                               const float cuspMidBlend, const float focusAdjustGain, const float focusGainBlend,
+                               const float cuspMidBlend, const float recip_focusAdjustGain, const float focusGainBlend,
                                const float2 estimated_hull_gammas, const int conditions)
   {
     const float focusJ               = compute_focusJ(JMcusp.x, midJ, _cuspMidBlend, limitJmax);
     const float analytical_threshold = compute_analytical_threshold(JMcusp.x, limitJmax, focusGainBlend);
-    const float slope_gain           = compute_slope_gain(testJmh.x, base_slope, limitJmax, focusAdjustGain, analytical_threshold);
+    const float slope_gain           = compute_slope_gain(testJmh.x, base_slope, limitJmax, recip_focusAdjustGain, analytical_threshold);
 
     const float intersectJ       = solve_J_intersect(float2(testJmh.x, testJmh.y), focusJ, limitJmax, slope_gain);
     const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
@@ -871,11 +873,11 @@ local:
 
   bool evaluate_hull_gamma_fit(const float2 JMcusp, float3 testJmh[], const int test_count, const float2 estimated_hull_gammas,
                                const float limitJmax, const float base_slope, const float midJ, const float cuspMidBlend,
-                               const float focusAdjustGain, const float focusGainBlend, const float luminance, const int conditions)
+                               const float recip_focusAdjustGain, const float focusGainBlend, const float luminance, const int conditions)
   {
     for (int testIndex = 0; testIndex != test_count; ++testIndex)
     {
-      const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope, midJ, cuspMidBlend, focusAdjustGain,
+      const float3 newLimitRGB = compute_test_location(JMcusp, testJmh[testIndex], limitJmax, base_slope, midJ, cuspMidBlend, recip_focusAdjustGain,
                                                        focusGainBlend, estimated_hull_gammas, conditions);
 
       if (!outside_hull(newLimitRGB, luminance))
@@ -887,7 +889,7 @@ local:
   }
 
   void initialise_upper_hull_gamma(float4 table[totalTableSize], const float midJ, const float cuspMidBlend, const float limitJmax,
-                                   const float base_slope, const float focusAdjustGain, const float focusGainBlend, const float luminance,
+                                   const float base_slope, const float recip_focusAdjustGain, const float focusGainBlend, const float luminance,
                                    const int conditions)
   {
     // Find upper hull gamma values for the gamut mapper
@@ -924,7 +926,7 @@ local:
         {
           const float2 estimated_hull_gammas = float2(bounds[INTERVAL_HIGH], table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
-                                               focusAdjustGain, focusGainBlend, luminance, conditions);
+                                               recip_focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
             bounds[INTERVAL_LOW]  =  bounds[INTERVAL_HIGH];
@@ -938,7 +940,7 @@ local:
           testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(testGamma, table[i][LOWER_GAMMA]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
-                                               focusAdjustGain, focusGainBlend, luminance, conditions);
+                                               recip_focusAdjustGain, focusGainBlend, luminance, conditions);
           bounds[all_inside] = testGamma;
         }
         table[i][UPPER_GAMMA] = testGamma;
@@ -955,7 +957,7 @@ local:
   }
 
   void initialise_lower_hull_gamma(float4 table[totalTableSize], const float midJ, const float cuspMidBlend, const float limitJmax,
-                                   const float base_slope, const float focusAdjustGain, const float focusGainBlend, const float luminance,
+                                   const float base_slope, const float recip_focusAdjustGain, const float focusGainBlend, const float luminance,
                                    const int conditions)
   {
     // Same process, for the bottom hull gamma
@@ -983,7 +985,7 @@ local:
         {
           const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], bounds[INTERVAL_HIGH]);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
-                                               focusAdjustGain, focusGainBlend, luminance, conditions);
+                                               recip_focusAdjustGain, focusGainBlend, luminance, conditions);
           if (all_inside)
           {
             bounds[INTERVAL_LOW]  =  bounds[INTERVAL_HIGH];
@@ -997,7 +999,7 @@ local:
           testGamma                          = midpoint(bounds);
           const float2 estimated_hull_gammas = float2(table[i][UPPER_GAMMA], testGamma);
           all_inside = evaluate_hull_gamma_fit(JMcusp, testJmh, test_count, estimated_hull_gammas, limitJmax, base_slope, midJ, cuspMidBlend,
-                                               focusAdjustGain, focusGainBlend, luminance, conditions);
+                                               recip_focusAdjustGain, focusGainBlend, luminance, conditions);
           bounds[all_inside] = testGamma;
         }
         table[i][LOWER_GAMMA] = testGamma;
@@ -1180,12 +1182,13 @@ local:
 
     initialise_cusp_table(limitingGamutCuspTable, _peakLuminance, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS,
                            smooth_cusp_scale, upperHullGamma, lowerHullGamma, log_peak);
+
     // Iterate gamma finding based on previous values
     for (int i = 0; i != 3; ++i)
     {
-      initialise_upper_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _focusGainBlend,
+      initialise_upper_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _recip_focusAdjustGain, _focusGainBlend,
                                   _peakLuminance, DISPLAY_CONDITIONS);
-      initialise_lower_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _focusAdjustGain, _focusGainBlend,
+      initialise_lower_hull_gamma(limitingGamutCuspTable, _midJ, _cuspMidBlend, _limitJmax, _base_slope, _recip_focusAdjustGain, _focusGainBlend,
                                   _peakLuminance, DISPLAY_CONDITIONS);
     }
     repair_broken_gamma_values(limitingGamutCuspTable);
@@ -1561,23 +1564,18 @@ local:
     return lerp(reachMTable[pos - 1], reachMTable[pos], t);
   }
 
-  // https://www.desmos.com/calculator/oe2fscya80
-  inline float getFocusGain(const float J, const float limitJmax, const float focusAdjustGain, const float analytical_threshold)
-  {
-    // Assume J (0.0, limitJmax)
-
-    if (J <= analytical_threshold)
-      return 1.0f; // makes the analytic inverse possible below cusp
-
-    // Approximate inverse required above threshold TODO: explain why
-    float gain = (limitJmax - analytical_threshold) / max(0.0001f, limitJmax - J);
-    return pow(log10(gain), 1.0f / focusAdjustGain) + 1.0f;
-  }
-
-  inline float compute_slope_gain(const float J, const float base_slope, const float limitJmax, const float focusAdjustGain,
+  inline float compute_slope_gain(const float J, const float base_slope, const float limitJmax, const float recip_focusAdjustGain,
                                   const float analytical_threshold)
   {
-    return base_slope * getFocusGain(J, limitJmax, focusAdjustGain, analytical_threshold);
+    // Assume J (0.0, limitJmax) TODO: Not quite true?
+    if (J <= analytical_threshold)
+      return base_slope; // makes the analytic inverse possible below threshold
+
+    // https://www.desmos.com/calculator/oe2fscya80
+    // Approximate inverse required above threshold TODO: explain why
+    float gain = (limitJmax - analytical_threshold) / max(0.0001f, limitJmax - J);
+    gain = 1.0f + pow(log10(gain), recip_focusAdjustGain);
+    return base_slope * gain;
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
@@ -1734,7 +1732,7 @@ local:
 
     float  Jx         = JMh.x;
     float2 JM         = float2{JMh.x, JMh.y};
-    float  slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _focusAdjustGain, analytical_threshold);
+    float  slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _recip_focusAdjustGain, analytical_threshold);
 
     if (INVERSE == direction)
     {
@@ -1744,7 +1742,7 @@ local:
       {
         Jx =
           gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, _clamped_smoothness, reachM, _model_gamma).x;
-        slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _focusAdjustGain, analytical_threshold);
+        slope_gain = compute_slope_gain(Jx, _base_slope, _limitJmax, _recip_focusAdjustGain, analytical_threshold);
       }
     }
     JM = gamutMapJM(JM, direction, _limitJmax, slope_gain, JMcusp, focusJ, estimated_hull_gammas, _clamped_smoothness, reachM, _model_gamma);
@@ -2144,7 +2142,7 @@ local:
     }
     else if (DEBUG_FocusConstants == diagnosticMode)
     {
-      output = float3(_cuspMidBlend, _focusGainBlend, _focusAdjustGain);
+      output = float3(_cuspMidBlend, _focusGainBlend, _recip_focusAdjustGain);
     }
     else if (DEBUG_reachMConditions == diagnosticMode)
     {
