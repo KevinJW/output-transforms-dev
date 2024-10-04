@@ -114,6 +114,7 @@ param:
   float upperHullGamma;
   bool  disableUpperHullGamma;
   bool  disableLowerHullGamma;
+  bool  enableLowerHullGammaScaling;
 
   // aces_ts Curve (ACES2 candidate) parameters
   float aces_ts_n_r;       // Normalized white in nits (what 1.0 should be)
@@ -207,6 +208,9 @@ local:
   float _limitJmax;
   float _model_gamma; // TODO: investigate uses of this
   float _base_slope;
+  
+  float _baseLowerGamma;
+  float _baseUpperGamma;
 
   // Chroma compression pre-calculated constants
   float  _compr;               // Compression TODO rename
@@ -274,6 +278,7 @@ local:
     defineParam(upperHullGamma, "Upper Hull Gamma", 1.0f);
     defineParam(disableLowerHullGamma, "Disable per hue Lower Hull Computation", true);
     defineParam(disableUpperHullGamma, "Disable per hue Upper Hull Computation", false);
+    defineParam(enableLowerHullGammaScaling, "Enable per hue Lower Hull Scaling", false);
 
     // aces_ts Curve (ACES2 candidate) parameters
     defineParam(aces_ts_n_r, "aces_ts_n_r", 100.0f);             // Normalized white in nits (what 1.0 should be)
@@ -778,10 +783,10 @@ local:
 
   void initialise_cusp_table(float4 output_table[totalTableSize], const float luminance, const float3 display_cusp_corners[totalCornerCount],
                              const float3 display_JMh_corners[totalCornerCount], const int conditions,
-                             const float2 smooth_cusp_scale, float upperHullGamma, float lowerHullGamma)
+                             const float2 smooth_cusp_scale, float upperHullGamma, float lowerHullGamma, const float log_peak)
   {
-    upperHullGamma = 1.0f / upperHullGamma;
-    lowerHullGamma = 1.0f / lowerHullGamma;
+    _baseUpperGamma = 1.0f / upperHullGamma;
+    _baseLowerGamma = 1.0f / (lowerHullGamma + enableLowerHullGammaScaling * (0.07f * log_peak));
 
     // the 'tempTableUnsorted' table is populated
     // in increments of H of the limiting gamut HSV space starting at H=0.0
@@ -793,7 +798,7 @@ local:
     {
       const float  hue = hueTable[i];
       const float2 JM  = find_display_cusp_for_hue(hue, display_cusp_corners, display_JMh_corners, conditions, hueFindingTolerance, previous) * smooth_cusp_scale;
-      output_table[i]  = float4(JM.x, JM.y, upperHullGamma, lowerHullGamma);
+      output_table[i]  = float4(JM.x, JM.y, _baseUpperGamma, _baseLowerGamma);
     }
 
     // Copy extra entries to ease the code to handle hues wrapping around
@@ -956,7 +961,6 @@ local:
     // Same process, for the bottom hull gamma
     const int   test_count                = 5;
     const float testPositions[test_count] = {0.01f, 0.1f, 0.4f, 0.6f, 0.75f};
-    const float fixed_gamma               = 1.0f / lowerHullGamma;
     if (!disableLowerHullGamma)
     {
       for (int i = baseIndex; i != (baseIndex + gamutCuspTableSize); ++i)
@@ -1159,7 +1163,7 @@ local:
                        panlrcm_fwd, panlrcm_inv);
   }
 
-  void init_cusp_tables(const float2 smooth_cusp_scale)
+  void init_cusp_tables(const float2 smooth_cusp_scale, const float log_peak)
   {
 #ifndef COMPILE_DIAGNOSTICS
     float3 reach_JMh_corners[reachCornerCount];
@@ -1175,7 +1179,7 @@ local:
     build_hue_table(hueTable, cube_hues, unique_hues);
 
     initialise_cusp_table(limitingGamutCuspTable, _peakLuminance, display_cusp_corners, display_JMh_corners, DISPLAY_CONDITIONS,
-                           smooth_cusp_scale, upperHullGamma, lowerHullGamma);
+                           smooth_cusp_scale, upperHullGamma, lowerHullGamma, log_peak);
     // Iterate gamma finding based on previous values
     for (int i = 0; i != 3; ++i)
     {
@@ -1205,7 +1209,7 @@ local:
     init_chroma_compression(_peakLuminance, log_peak);
     const float2 smooth_cusp_scale = init_gamut_mapper(_peakLuminance, log_peak, limitWhite);
 
-    init_cusp_tables(smooth_cusp_scale);
+    init_cusp_tables(smooth_cusp_scale, log_peak);
   }
 
 #ifdef USE_DEGREES
@@ -1515,7 +1519,7 @@ local:
   // so to find the correct entry for a given CAM hue (h) value
   // one must search the table entries for the matching entry.z component
 
-  int lookupLimitingCuspHue(float wrapped_hue)
+  int lookupLimitingCuspHue(const float wrapped_hue)
   {
     // samples are almost uniform should be able to find the correct entry +/- 6 entries from middle
     // on average it is actually in a narrow range than this, left as an exercise for the reader to
@@ -1542,23 +1546,23 @@ local:
     return bounds[INTERVAL_HIGH];
   }
 
-  float limiting_lerp_fraction(float wrapped_hue, int pos)
+  float limiting_lerp_fraction(const float wrapped_hue, const int pos)
   {
     return (wrapped_hue - hueTable[pos - 1]) / (hueTable[pos] - hueTable[pos - 1]);
   }
 
-  inline float4 limitingCuspFromTable(int pos, float t)
+  inline float4 limitingCuspFromTable(const int pos, const float t)
   {
     return lerp(limitingGamutCuspTable[pos - 1], limitingGamutCuspTable[pos], t);
   }
 
-  inline float reachMFromTable(int pos, float t)
+  inline float reachMFromTable(const int pos, const float t)
   {
     return lerp(reachMTable[pos - 1], reachMTable[pos], t);
   }
 
   // https://www.desmos.com/calculator/oe2fscya80
-  inline float getFocusGain(float J, float limitJmax, float focusAdjustGain, float analytical_threshold)
+  inline float getFocusGain(const float J, const float limitJmax, const float focusAdjustGain, const float analytical_threshold)
   {
     // Assume J (0.0, limitJmax)
 
@@ -1566,7 +1570,7 @@ local:
       return 1.0f; // makes the analytic inverse possible below cusp
 
     // Approximate inverse required above threshold TODO: explain why
-    float gain = (limitJmax - analytical_threshold) / max(0.0001f, (limitJmax - min(limitJmax, J)));
+    float gain = (limitJmax - analytical_threshold) / max(0.0001f, limitJmax - J);
     return pow(log10(gain), 1.0f / focusAdjustGain) + 1.0f;
   }
 
@@ -1577,7 +1581,7 @@ local:
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
-  float solve_J_intersect(float2 JM, float focusJ, float maxJ, float slope_gain)
+  float solve_J_intersect(const float2 JM, const float focusJ, const float maxJ, const float slope_gain)
   {
     const float a = JM.y / (focusJ * slope_gain);
     float b;
@@ -1599,18 +1603,9 @@ local:
     return 2.0f * c / (-b + root);
   }
 
-  inline float compute_compression_vector_slope(const float intersectJ, const float focusJ, float limitJmax, float slope_gain)
+  inline float compute_compression_vector_slope(const float intersectJ, const float focusJ, const float limitJmax, const float slope_gain)
   {
-    float direction_scaler;
-    if (intersectJ <= focusJ)
-    {
-      direction_scaler = intersectJ;
-    }
-    else
-    {
-      direction_scaler = (limitJmax - intersectJ);
-    }
-
+    const float direction_scaler = (intersectJ <= focusJ) ? intersectJ : (limitJmax - intersectJ);
     return direction_scaler * (intersectJ - focusJ) / (focusJ * slope_gain);
   }
 
@@ -1635,8 +1630,8 @@ local:
   }
 
   // reimplemented from https://github.com/nick-shaw/aces-ot-vwg-experiments/blob/master/python/intersection_approx.py
-  float findGamutBoundaryMIntersection(float2 JM_cusp, float J_intersect_cusp, float J_max, float J_intersect_source, float smoothness,
-                                       float2 estimated_hull_gammas, const float slope)
+  float findGamutBoundaryMIntersection(const float2 JM_cusp, float J_intersect_cusp, const float J_max, const float J_intersect_source, const float smoothness,
+                                       const float2 estimated_hull_gammas, const float slope)
   {
     const float gamma_top    = estimated_hull_gammas.x;
     const float gamma_bottom = estimated_hull_gammas.y;
@@ -1665,15 +1660,17 @@ local:
       if (factor >= 1.0f)
         return scale;
       else
-        return scale * (-(factor / (factor - 1.0f)));
+        return scale * -(factor / (factor - 1.0f));
     }
-    return scale * (factor) / (1.0f + factor);
+    return scale * factor / (1.0f + factor);
   }
 
   inline float gamut_mapped_location(const float location, const float gamutBoundary, const float reachBoundary, const bool direction)
   {
     // Assumes _compressionFuncParams in (0.0, 1.0)
-    const float threshold = clamp(gamutBoundary / reachBoundary, _compressionFuncParams, 0.99999f) * gamutBoundary;
+    const float threshold_limit = _compressionFuncParams;
+    const float proportion = clamp(gamutBoundary / reachBoundary, threshold_limit, 0.9999999f);
+    const float threshold  = proportion * gamutBoundary;
 
     // Values upto the threshold or when both boundaries are the same remain as is
     if (location <= threshold || gamutBoundary == reachBoundary)
@@ -1686,7 +1683,7 @@ local:
 
     // Assumes boundary != reach
     // Generally speaking boundary should be < reach
-    const float scale  = (reach_offset) / (((reach_offset) / (boundary_offset)) - 1.0f);
+    const float scale  = reach_offset / ((reach_offset / boundary_offset) - 1.0f);
     const float factor = location_offset / scale;
 
     const float relative_location = reinhard_compress(scale, factor, direction);
@@ -1694,30 +1691,30 @@ local:
     return (threshold + relative_location); // shift back to absolute
   }
 
-  float2 gamutMapJM(float2 JM, const bool direction, float limitJmax, float slope_gain, float2 JMcusp, float focusJ, float2 estimated_hull_gammas,
-                    float smoothness, float reachMaxM, float model_gamma)
+  float2 gamutMapJM(const float2 JM, const bool direction, const float limitJmax, const float slope_gain, const float2 JMcusp,
+                    const float focusJ, const float2 estimated_hull_gammas, const float smoothness, const float reachMaxM, const float model_gamma)
   {
     const float intersectJ       = solve_J_intersect(JM, focusJ, limitJmax, slope_gain);
     const float slope            = compute_compression_vector_slope(intersectJ, focusJ, limitJmax, slope_gain);
     const float J_intersect_cusp = solve_J_intersect(JMcusp, focusJ, limitJmax, slope_gain);
     const float ganutBoundaryM =
       findGamutBoundaryMIntersection(JMcusp, J_intersect_cusp, limitJmax, intersectJ, smoothness, estimated_hull_gammas, slope);
-
+/*
     if (ganutBoundaryM <= 0.0f)
     {
       // TODO: when does this happen? Causes Nans in gamut_mapped_location, Something funny about yellowish pixels PI (or 180 degrees)
       return float2(JM.x, 0.0f);
     }
-
+*/
     // Compress the out of gamut color along the projection line
-    const float reachMax = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
-    const float mappedM  = gamut_mapped_location(JM.y, ganutBoundaryM, reachMax, direction);
-    const float mappedJ  = slope * mappedM + intersectJ;
+    const float reachMax  = estimate_line_and_boundary_intersection_M(intersectJ, slope, model_gamma, limitJmax, reachMaxM, limitJmax);
+    const float mappedM   = gamut_mapped_location(JM.y, ganutBoundaryM, reachMax, direction);
+    const float mappedJ   = slope * mappedM + intersectJ;
 
     return float2{mappedJ, mappedM};
   }
 
-  inline float compute_focusJ(float J, float midJ, float cuspMidBlend, float limitJmax)
+  inline float compute_focusJ(const float J, const float midJ, const float cuspMidBlend, const float limitJmax)
   {
     return lerp(J, midJ, min(1.0f, cuspMidBlend - (J / limitJmax)));
   }
@@ -2112,7 +2109,7 @@ local:
       const int    pos         = lookupLimitingCuspHue(wrapped_hue);
       const float  t           = limiting_lerp_fraction(wrapped_hue, pos);
       const float4 cusp        = limitingCuspFromTable(pos, t);
-      output                   = float3(cusp[UPPER_GAMMA], cusp[LOWER_GAMMA], t);
+      output                   = float3(cusp[UPPER_GAMMA], cusp[LOWER_GAMMA], _baseUpperGamma);
     }
     else if (DEBUG_reachGamutCuspTable == diagnosticMode)
     {
